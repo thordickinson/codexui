@@ -1174,6 +1174,27 @@ class AppServerProcess {
   }
 
   private handleServerRequest(requestId: number, method: string, params: unknown): void {
+    if (method === 'currentTime/read') {
+      const requestParams = asRecord(params)
+      const threadId = readNonEmptyString(requestParams?.threadId)
+      this.sendServerRequestReply(requestId, {
+        result: {
+          currentTimeAt: Math.floor(Date.now() / 1000),
+        },
+      })
+      this.emitNotification({
+        method: 'server/request/resolved',
+        params: {
+          id: requestId,
+          method,
+          threadId,
+          mode: 'automatic',
+          resolvedAtIso: new Date().toISOString(),
+        },
+      })
+      return
+    }
+
     const pendingRequest: PendingServerRequest = {
       id: requestId,
       method,
