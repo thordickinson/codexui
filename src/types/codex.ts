@@ -311,6 +311,10 @@ export type UiCreditsSnapshot = {
   balance: string | null
 }
 
+export type UiRateLimitResetCreditsSummary = {
+  availableCount: number
+}
+
 export type UiSpendControlLimitSnapshot = {
   limit: string
   used: string
@@ -324,8 +328,19 @@ export type UiRateLimitSnapshot = {
   primary: UiRateLimitWindow | null
   secondary: UiRateLimitWindow | null
   credits: UiCreditsSnapshot | null
+  rateLimitResetCredits: UiRateLimitResetCreditsSummary | null
   individualLimit: UiSpendControlLimitSnapshot | null
   planType: string | null
+}
+
+export type UiRateLimitResetCreditOutcome = 'reset' | 'nothingToReset' | 'noCredit' | 'alreadyRedeemed'
+
+export type UiWorkspaceMessage = {
+  id: string
+  type: 'headline' | 'announcement' | 'unknown'
+  body: string
+  createdAt: number | null
+  archivedAt: number | null
 }
 
 export type UiTokenUsageBreakdown = {

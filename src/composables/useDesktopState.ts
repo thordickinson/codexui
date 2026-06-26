@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import {
   archiveThread,
+  consumeAccountRateLimitResetCredit,
   deleteThread,
   clearThreadGoal as clearThreadGoalRpc,
   forkThread as forkThreadRpc,
@@ -14,6 +15,7 @@ import {
   getSkillsList,
   getThreadDetail,
   getThreadGoal,
+  getWorkspaceMessages,
   interruptThreadTurn,
   normalizeThreadGoalPayload,
   pickCodexRateLimitSnapshot,
@@ -66,6 +68,7 @@ import type {
   UiThreadTokenUsage,
   UiTokenUsageBreakdown,
   UiThread,
+  UiWorkspaceMessage,
 } from '../types/codex'
 
 function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
@@ -961,6 +964,8 @@ export function useDesktopState() {
   const pendingServerRequestsByThreadId = ref<Record<string, UiServerRequest[]>>({})
   const pendingTurnRequestByThreadId = ref<Record<string, PendingTurnRequest>>({})
   const codexRateLimit = ref<UiRateLimitSnapshot | null>(null)
+  const codexWorkspaceMessages = ref<UiWorkspaceMessage[]>([])
+  const isConsumingRateLimitResetCredit = ref(false)
   const threadTokenUsageByThreadId = ref<Record<string, UiThreadTokenUsage>>({})
   const threadGoalByThreadId = ref<Record<string, UiThreadGoal>>({})
   const threadGoalActionPendingByThreadId = ref<Record<string, boolean>>({})
@@ -1022,6 +1027,7 @@ export function useDesktopState() {
     }
   })
   const codexQuota = computed<UiRateLimitSnapshot | null>(() => codexRateLimit.value)
+  const workspaceMessages = computed<UiWorkspaceMessage[]>(() => codexWorkspaceMessages.value)
   const availableModelIds = computed(() => availableModels.value.map((model) => model.id))
   const selectedThreadTokenUsage = computed<UiThreadTokenUsage | null>(() => {
     const threadId = selectedThreadId.value
@@ -2314,6 +2320,56 @@ export function useDesktopState() {
     const threadId = extractThreadIdFromNotification(notification)
     if (!threadId) return null
 
+    if (notification.method === 'model/safetyBuffering/updated') {
+      const params = asRecord(notification.params)
+      const model = readString(params?.model)
+      const fasterModel = readString(params?.fasterModel)
+      const reasons = Array.isArray(params?.reasons)
+        ? params.reasons.map((reason) => readString(reason)).filter((reason) => reason.length > 0)
+        : []
+      const details = [
+        model ? `Model: ${model}` : '',
+        fasterModel ? `Faster option: ${fasterModel}` : '',
+        ...reasons.slice(0, 2),
+      ].filter((line) => line.length > 0)
+      return {
+        threadId,
+        activity: {
+          label: params?.showBufferingUi === true ? 'Checking model response' : 'Thinking',
+          details,
+        },
+      }
+    }
+
+    if (notification.method === 'model/rerouted') {
+      const params = asRecord(notification.params)
+      const fromModel = readString(params?.fromModel)
+      const toModel = readString(params?.toModel)
+      const reason = readString(params?.reason)
+      const route = fromModel && toModel ? `${fromModel} -> ${toModel}` : ''
+      return {
+        threadId,
+        activity: {
+          label: 'Switching model',
+          details: [route, reason].filter((line) => line.length > 0),
+        },
+      }
+    }
+
+    if (notification.method === 'model/verification') {
+      const params = asRecord(notification.params)
+      const verifications = Array.isArray(params?.verifications)
+        ? params.verifications.map((verification) => readString(verification)).filter((verification) => verification.length > 0)
+        : []
+      return {
+        threadId,
+        activity: {
+          label: 'Verifying model access',
+          details: verifications.slice(0, 2),
+        },
+      }
+    }
+
     if (notification.method === 'turn/started') {
       return {
         threadId,
@@ -3306,6 +3362,37 @@ export function useDesktopState() {
     }
   }
 
+  async function refreshWorkspaceMessages(): Promise<void> {
+    try {
+      codexWorkspaceMessages.value = await getWorkspaceMessages()
+    } catch {
+      // Workspace messages are advisory; keep the current UI state on failure.
+    }
+  }
+
+  async function consumeRateLimitResetCredit(): Promise<void> {
+    if (isConsumingRateLimitResetCredit.value) return
+
+    isConsumingRateLimitResetCredit.value = true
+    try {
+      const outcome = await consumeAccountRateLimitResetCredit()
+      await refreshCodexRateLimits()
+      if (outcome === 'noCredit') {
+        error.value = 'No rate-limit reset credits are available.'
+      } else if (outcome === 'nothingToReset') {
+        error.value = 'There is no active rate limit to reset.'
+      } else if (outcome === 'alreadyRedeemed') {
+        error.value = 'That rate-limit reset was already redeemed.'
+      } else {
+        error.value = ''
+      }
+    } catch (unknownError) {
+      error.value = unknownError instanceof Error ? unknownError.message : 'Failed to consume rate-limit reset credit'
+    } finally {
+      isConsumingRateLimitResetCredit.value = false
+    }
+  }
+
   async function refreshAll(
     options: { includeSelectedThreadMessages?: boolean; awaitAncillaryRefreshes?: boolean } = {},
   ) {
@@ -3321,6 +3408,7 @@ export function useDesktopState() {
         refreshPermissionProfiles(),
         refreshSkills(),
         refreshCodexRateLimits(),
+        refreshWorkspaceMessages(),
       ]).then(() => undefined)
       if (includeSelectedThreadMessages) {
         await loadMessages(selectedThreadId.value)
@@ -4326,6 +4414,8 @@ export function useDesktopState() {
     activeTurnIdByThreadId.value = {}
     queuedMessagesByThreadId.value = {}
     codexRateLimit.value = null
+    codexWorkspaceMessages.value = []
+    isConsumingRateLimitResetCredit.value = false
     threadTokenUsageByThreadId.value = {}
     threadGoalByThreadId.value = {}
     threadGoalActionPendingByThreadId.value = {}
@@ -4373,6 +4463,8 @@ export function useDesktopState() {
     selectedThreadServerRequests,
     selectedLiveOverlay,
     codexQuota,
+    workspaceMessages,
+    isConsumingRateLimitResetCredit,
     selectedThreadTokenUsage,
     selectedThreadGoal,
     selectedThreadGoalError,
@@ -4395,6 +4487,7 @@ export function useDesktopState() {
     error,
     refreshAll,
     refreshSkills,
+    consumeRateLimitResetCredit,
     selectThread,
     loadMessages,
     ensureThreadMessagesLoaded,

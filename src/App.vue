@@ -286,6 +286,8 @@
                   :thread-goal-error="selectedThreadGoalError"
                   :is-thread-goal-pending="isSelectedThreadGoalPending"
                   :codex-quota="codexQuota"
+                  :workspace-messages="workspaceMessages"
+                  :is-consuming-rate-limit-reset-credit="isConsumingRateLimitResetCredit"
                   :is-turn-in-progress="false"
                   :is-interrupting-turn="false" :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
                   :dictation-click-to-toggle="dictationClickToToggle"
@@ -296,6 +298,7 @@
                   :branch-status="composerBranchStatus"
                   @submit="onSubmitThreadMessage"
                   @goal-command="onThreadGoalCommand"
+                  @consume-rate-limit-reset-credit="consumeRateLimitResetCredit"
                   @update:selected-collaboration-mode="onSelectCollaborationMode"
                   @update:selected-model="onSelectModel" @update:selected-reasoning-effort="onSelectReasoningEffort"
                   @update:selected-branch="onSelectComposerBranch" />
@@ -342,6 +345,8 @@
                     :thread-goal-error="selectedThreadGoalError"
                     :is-thread-goal-pending="isSelectedThreadGoalPending"
                     :codex-quota="codexQuota"
+                    :workspace-messages="workspaceMessages"
+                    :is-consuming-rate-limit-reset-credit="isConsumingRateLimitResetCredit"
                     :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
@@ -353,6 +358,7 @@
                     :branch-status="composerBranchStatus"
                     @update:selected-collaboration-mode="onSelectCollaborationMode"
                     @goal-command="onThreadGoalCommand"
+                    @consume-rate-limit-reset-credit="consumeRateLimitResetCredit"
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                     @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
                 </div>
@@ -429,6 +435,8 @@ const {
   selectedThreadServerRequests,
   selectedLiveOverlay,
   codexQuota,
+  workspaceMessages,
+  isConsumingRateLimitResetCredit,
   selectedThreadTokenUsage,
   selectedThreadGoal,
   selectedThreadGoalError,
@@ -449,6 +457,7 @@ const {
   isInterruptingTurn,
   refreshAll,
   refreshSkills,
+  consumeRateLimitResetCredit,
   selectThread,
   ensureThreadMessagesLoaded,
   setThreadScrollState,

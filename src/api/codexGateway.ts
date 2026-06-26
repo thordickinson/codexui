@@ -49,6 +49,8 @@ import type {
   UiGitWorktree,
   UiMessage,
   UiProjectGroup,
+  UiRateLimitResetCreditOutcome,
+  UiRateLimitResetCreditsSummary,
   UiReviewAction,
   UiReviewActionLevel,
   UiReviewFile,
@@ -64,6 +66,7 @@ import type {
   UiSpendControlLimitSnapshot,
   UiThreadGoal,
   UiThreadGoalStatus,
+  UiWorkspaceMessage,
 } from '../types/codex'
 
 type CurrentModelConfig = {
@@ -178,6 +181,16 @@ function readNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function readNumberLike(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'bigint') return Number(value)
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
 function readBoolean(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null
 }
@@ -231,6 +244,18 @@ function normalizeCreditsSnapshot(value: unknown): UiCreditsSnapshot | null {
   }
 }
 
+function normalizeRateLimitResetCreditsSummary(value: unknown): UiRateLimitResetCreditsSummary | null {
+  const record = asRecord(value)
+  if (!record) return null
+
+  const availableCount = readNumberLike(record.availableCount ?? record.available_count)
+  if (availableCount === null) return null
+
+  return {
+    availableCount: Math.max(0, Math.trunc(availableCount)),
+  }
+}
+
 function normalizeSpendControlLimitSnapshot(value: unknown): UiSpendControlLimitSnapshot | null {
   const record = asRecord(value)
   if (!record) return null
@@ -263,6 +288,7 @@ function normalizeRateLimitSnapshot(value: unknown): UiRateLimitSnapshot | null 
     primary,
     secondary,
     credits,
+    rateLimitResetCredits: normalizeRateLimitResetCreditsSummary(record.rateLimitResetCredits ?? record.rate_limit_reset_credits),
     individualLimit,
     planType: readString(record.planType ?? record.plan_type),
   }
@@ -297,11 +323,25 @@ export function pickCodexRateLimitSnapshot(payload: unknown): UiRateLimitSnapsho
   const record = asRecord(payload)
   if (!record) return null
 
+  const resetCredits = normalizeRateLimitResetCreditsSummary(record.rateLimitResetCredits ?? record.rate_limit_reset_credits)
   const rateLimitsByLimitId = asRecord(record.rateLimitsByLimitId ?? record.rate_limits_by_limit_id)
   const codexBucket = normalizeRateLimitSnapshot(rateLimitsByLimitId?.codex)
-  if (codexBucket) return codexBucket
+  if (codexBucket) return { ...codexBucket, rateLimitResetCredits: resetCredits ?? codexBucket.rateLimitResetCredits }
 
-  return normalizeRateLimitSnapshot(record.rateLimits ?? record.rate_limits)
+  const fallback = normalizeRateLimitSnapshot(record.rateLimits ?? record.rate_limits)
+  if (fallback) return { ...fallback, rateLimitResetCredits: resetCredits ?? fallback.rateLimitResetCredits }
+
+  if (!resetCredits) return null
+  return {
+    limitId: null,
+    limitName: null,
+    primary: null,
+    secondary: null,
+    credits: null,
+    rateLimitResetCredits: resetCredits,
+    individualLimit: null,
+    planType: null,
+  }
 }
 
 async function callRpc<T>(method: string, params?: unknown): Promise<T> {
@@ -897,6 +937,70 @@ export async function getAccountRateLimits(): Promise<UiRateLimitSnapshot | null
     return pickCodexRateLimitSnapshot(payload)
   } catch (error) {
     throw normalizeCodexApiError(error, 'Failed to load account rate limits', 'account/rateLimits/read')
+  }
+}
+
+function createIdempotencyKey(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+export async function consumeAccountRateLimitResetCredit(): Promise<UiRateLimitResetCreditOutcome> {
+  try {
+    const payload = await callRpc<unknown>('account/rateLimitResetCredit/consume', {
+      idempotencyKey: createIdempotencyKey(),
+    })
+    const record = asRecord(payload)
+    const outcome = readString(record?.outcome)
+    if (
+      outcome === 'reset' ||
+      outcome === 'nothingToReset' ||
+      outcome === 'noCredit' ||
+      outcome === 'alreadyRedeemed'
+    ) {
+      return outcome
+    }
+    throw new Error('account/rateLimitResetCredit/consume returned an unknown outcome')
+  } catch (error) {
+    throw normalizeCodexApiError(
+      error,
+      'Failed to consume account rate limit reset credit',
+      'account/rateLimitResetCredit/consume',
+    )
+  }
+}
+
+function normalizeWorkspaceMessage(value: unknown): UiWorkspaceMessage | null {
+  const record = asRecord(value)
+  if (!record) return null
+
+  const id = readString(record.messageId ?? record.message_id)
+  const body = readString(record.messageBody ?? record.message_body)
+  if (!id || !body) return null
+
+  const type = readString(record.messageType ?? record.message_type)
+  return {
+    id,
+    type: type === 'headline' || type === 'announcement' ? type : 'unknown',
+    body,
+    createdAt: readNumber(record.createdAt ?? record.created_at),
+    archivedAt: readNumber(record.archivedAt ?? record.archived_at),
+  }
+}
+
+export async function getWorkspaceMessages(): Promise<UiWorkspaceMessage[]> {
+  try {
+    const payload = await callRpc<unknown>('account/workspaceMessages/read', {})
+    const record = asRecord(payload)
+    if (record?.featureEnabled === false) return []
+    const rows = Array.isArray(record?.messages) ? record.messages : []
+    return rows
+      .map((row) => normalizeWorkspaceMessage(row))
+      .filter((message): message is UiWorkspaceMessage => message !== null && message.archivedAt === null)
+  } catch {
+    return []
   }
 }
 

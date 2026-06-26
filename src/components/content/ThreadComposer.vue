@@ -5,6 +5,15 @@
     </p>
 
     <div class="thread-composer-shell" :class="{ 'thread-composer-shell--no-top-radius': hasQueueAbove }">
+      <div
+        v-if="workspaceMessageText"
+        class="thread-composer-workspace-message"
+        :data-type="workspaceMessageType"
+        :title="workspaceMessageText"
+      >
+        {{ workspaceMessageText }}
+      </div>
+
       <div v-if="selectedImages.length > 0" class="thread-composer-attachments">
         <div v-for="image in selectedImages" :key="image.id" class="thread-composer-attachment">
           <img class="thread-composer-attachment-image" :src="image.url" :alt="image.name || 'Selected image'" />
@@ -57,7 +66,7 @@
       </div>
 
       <div
-        v-if="quotaSummaryText || contextUsageSummaryText"
+        v-if="quotaSummaryText || rateLimitResetCreditsText || contextUsageSummaryText"
         class="thread-composer-rate-limit"
         aria-live="polite"
       >
@@ -67,6 +76,16 @@
             class="thread-composer-rate-limit-value"
             :title="quotaTooltipText"
           >{{ quotaSummaryText }}</span>
+          <button
+            v-if="rateLimitResetCreditsText"
+            class="thread-composer-rate-limit-reset"
+            type="button"
+            :title="rateLimitResetCreditsTooltip"
+            :disabled="isInteractionDisabled || props.isConsumingRateLimitResetCredit"
+            @click="emit('consume-rate-limit-reset-credit')"
+          >
+            {{ rateLimitResetCreditsText }}
+          </button>
           <span
             v-if="contextUsageSummaryText"
             class="thread-composer-context-usage-inline"
@@ -407,6 +426,7 @@ import type {
   UiThreadGoalCommand,
   UiThreadTokenUsage,
   UiTokenUsageBreakdown,
+  UiWorkspaceMessage,
 } from '../../types/codex'
 import { useDictation } from '../../composables/useDictation'
 import { useMobile } from '../../composables/useMobile'
@@ -445,6 +465,8 @@ const props = defineProps<{
   threadGoalError?: string
   isThreadGoalPending?: boolean
   codexQuota?: UiRateLimitSnapshot | null
+  workspaceMessages?: UiWorkspaceMessage[]
+  isConsumingRateLimitResetCredit?: boolean
   isTurnInProgress?: boolean
   isInterruptingTurn?: boolean
   disabled?: boolean
@@ -478,6 +500,7 @@ const emit = defineEmits<{
   'update:selected-model': [modelId: string]
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-branch': [branch: string]
+  'consume-rate-limit-reset-credit': []
 }>()
 
 type SelectedImage = {
@@ -670,6 +693,23 @@ const placeholderText = computed(() =>
 const quotaSummaryText = computed(() => buildQuotaSummaryText(props.codexQuota ?? null))
 const quotaWeeklyRefreshText = computed(() => '')
 const quotaTooltipText = computed(() => buildQuotaTooltipText(props.codexQuota ?? null))
+const rateLimitResetCreditCount = computed(() => props.codexQuota?.rateLimitResetCredits?.availableCount ?? 0)
+const rateLimitResetCreditsText = computed(() => {
+  const count = rateLimitResetCreditCount.value
+  if (count <= 0) return ''
+  return props.isConsumingRateLimitResetCredit ? 'Resetting...' : `Reset (${count})`
+})
+const rateLimitResetCreditsTooltip = computed(() => {
+  const count = rateLimitResetCreditCount.value
+  if (count <= 0) return ''
+  return count === 1 ? 'Use 1 available rate-limit reset credit' : `Use 1 of ${count} available rate-limit reset credits`
+})
+const activeWorkspaceMessage = computed(() => {
+  const messages = props.workspaceMessages ?? []
+  return messages.find((message) => message.body.trim().length > 0) ?? null
+})
+const workspaceMessageText = computed(() => activeWorkspaceMessage.value?.body.trim() ?? '')
+const workspaceMessageType = computed(() => activeWorkspaceMessage.value?.type ?? 'unknown')
 const contextUsageView = computed(() => buildContextUsageView(props.threadTokenUsage ?? null))
 const contextUsageSummaryText = computed(() => contextUsageView.value?.summaryText ?? '')
 const contextUsageTooltipText = computed(() => contextUsageView.value?.tooltipText ?? '')
@@ -1729,6 +1769,14 @@ watch(
   @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent text-zinc-400 transition hover:bg-zinc-200 hover:text-zinc-700 text-xs leading-none p-0;
 }
 
+.thread-composer-workspace-message {
+  @apply mb-2 truncate rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-800;
+}
+
+.thread-composer-workspace-message[data-type='announcement'] {
+  @apply border-amber-200 bg-amber-50 text-amber-800;
+}
+
 .thread-composer-skill-chips {
   @apply mb-2 flex flex-wrap gap-1.5;
 }
@@ -1763,6 +1811,10 @@ watch(
 
 .thread-composer-rate-limit-value {
   @apply min-w-0 flex-1 truncate;
+}
+
+.thread-composer-rate-limit-reset {
+  @apply inline-flex h-5 shrink-0 items-center rounded-md border border-emerald-200 bg-emerald-50 px-1.5 text-[11px] font-medium leading-none text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60;
 }
 
 .thread-composer-context-usage-inline {
