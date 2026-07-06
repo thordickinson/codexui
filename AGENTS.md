@@ -11,7 +11,9 @@
 - Recommended update flow:
   1. `npm run build`
   2. `tmux has-session -t codexui-prod 2>/dev/null && tmux kill-session -t codexui-prod`
-  3. `tmux new-session -d -s codexui-prod 'cd /projects/srv/codexui && node dist-cli/index.js --port 4173 --no-tunnel --no-password'`
+  3. `tmux set-environment -g SHELL /bin/bash && tmux set-option -g default-shell /bin/bash`
+  4. `tmux new-session -d -s codexui-prod -c /projects/srv/codexui 'SHELL=/bin/bash exec /bin/bash -l'`
+  5. `tmux send-keys -t codexui-prod:0.0 'node dist-cli/index.js --port 4173 --no-tunnel --no-password' C-m`
 
 ## "Push to main or commit to main" Means Merge To Local Main
 
