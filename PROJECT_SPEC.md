@@ -98,7 +98,8 @@ codex-web-local/
 │   ├── main.ts                       # Vue app bootstrap
 │   └── style.css                     # Global Tailwind styles
 ├── documentation/                    # Codex app-server protocol docs
-│   ├── APP_SERVER_DOCUMENTATION.md   # Full protocol reference (66 methods, 7 server requests, 34 notifications)
+│   ├── APP_SERVER_DOCUMENTATION.md   # Legacy generated protocol reference
+│   ├── CODEX_CLI_PROTOCOL_COMPATIBILITY.md # Current CLI protocol audit and integration notes
 │   └── app-server-schemas/           # Materialized JSON + TypeScript schemas
 │       ├── json/                     # JSON Schema files (v1, v2, root)
 │       └── typescript/               # TypeScript type definitions (v1, v2, root)

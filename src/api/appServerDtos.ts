@@ -2,7 +2,7 @@ export type { ThreadListResponse } from '../../documentation/app-server-schemas/
 export type { ThreadReadResponse } from '../../documentation/app-server-schemas/typescript/v2/ThreadReadResponse'
 export type { ThreadSearchResponse } from '../../documentation/app-server-schemas/typescript/v2/ThreadSearchResponse'
 export type { ThreadTurnsListResponse } from '../../documentation/app-server-schemas/typescript/v2/ThreadTurnsListResponse'
-export type { ThreadTurnsItemsListResponse } from '../../documentation/app-server-schemas/typescript/v2/ThreadTurnsItemsListResponse'
+export type { ThreadItemsListResponse } from '../../documentation/app-server-schemas/typescript/v2/ThreadItemsListResponse'
 export type { PermissionProfileListResponse } from '../../documentation/app-server-schemas/typescript/v2/PermissionProfileListResponse'
 export type { PermissionProfileSummary } from '../../documentation/app-server-schemas/typescript/v2/PermissionProfileSummary'
 export type { ThreadLoadedListResponse } from '../../documentation/app-server-schemas/typescript/v2/ThreadLoadedListResponse'

@@ -17,7 +17,7 @@ import type {
   ThreadGoalStatus,
   ThreadListResponse,
   ThreadReadResponse,
-  ThreadTurnsItemsListResponse,
+  ThreadItemsListResponse,
   ThreadTurnsListResponse,
   TurnStartResponse,
   Turn,
@@ -505,19 +505,61 @@ async function listThreadTurnItems(threadId: string, turnId: string): Promise<Tu
   let pageCount = 0
 
   do {
-    const payload: ThreadTurnsItemsListResponse = await callRpc<ThreadTurnsItemsListResponse>('thread/turns/items/list', {
+    const payload = await callThreadItemsList(threadId, turnId, cursor)
+    const pageItems = Array.isArray(payload.data)
+      ? payload.data
+        .map((entry) => readThreadItemPageEntry(entry))
+        .filter((entry): entry is Turn['items'][number] => entry !== null)
+      : []
+    data.push(...pageItems)
+    cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.length > 0 ? payload.nextCursor : null
+    pageCount += 1
+  } while (cursor && pageCount < 100)
+
+  return data
+}
+
+async function callThreadItemsList(threadId: string, turnId: string, cursor: string | null): Promise<ThreadItemsListResponse> {
+  try {
+    return await callRpc<ThreadItemsListResponse>('thread/items/list', {
       threadId,
       turnId,
       cursor,
       limit: 200,
       sortDirection: 'asc',
     })
-    data.push(...(Array.isArray(payload.data) ? payload.data : []))
-    cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.length > 0 ? payload.nextCursor : null
-    pageCount += 1
-  } while (cursor && pageCount < 100)
+  } catch (error) {
+    if (!isThreadItemsListUnavailable(error)) {
+      throw error
+    }
 
-  return data
+    return await callRpc<ThreadItemsListResponse>('thread/turns/items/list', {
+      threadId,
+      turnId,
+      cursor,
+      limit: 200,
+      sortDirection: 'asc',
+    })
+  }
+}
+
+function isThreadItemsListUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : ''
+  return message.includes('thread/items/list')
+    || message.includes('method not found')
+    || message.includes('unknown method')
+    || message.includes('not supported yet')
+}
+
+function readThreadItemPageEntry(value: unknown): Turn['items'][number] | null {
+  const record = asRecord(value)
+  if (record && asRecord(record.item) && typeof asRecord(record.item)?.type === 'string') {
+    return record.item as Turn['items'][number]
+  }
+  if (record && typeof record.type === 'string') {
+    return record as Turn['items'][number]
+  }
+  return null
 }
 
 async function listThreadTurns(threadId: string): Promise<Turn[]> {
@@ -531,7 +573,7 @@ async function listThreadTurns(threadId: string): Promise<Turn[]> {
       cursor,
       limit: 100,
       sortDirection: 'asc',
-      itemsView: 'full',
+      itemsView: 'summary',
     })
     turns.push(...(Array.isArray(payload.data) ? payload.data : []))
     cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.length > 0 ? payload.nextCursor : null

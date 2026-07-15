@@ -218,6 +218,12 @@ If a finding conflicts with current official docs or current official code, trea
   - Run build/typecheck.
   - Run Playwright in headless mode and capture a screenshot showing sidebar order.
 
+## Findings: App-Server Thread Item Pagination (2026-07-15)
+
+- Current stable `@openai/codex` `latest` was `0.144.4`; `codex app-server generate-* --experimental` no longer emits `thread/turns/items/list` and emits `thread/items/list` instead.
+- Official `openai/codex` app-server README says paginated `thread/turns/list` should use `itemsView: "summary"` or `"notLoaded"`; full item payloads should be fetched with `thread/items/list`.
+- Stable `0.144.4` generated TypeScript has `ThreadItemsListResponse.data` as `ThreadItem[]`, while current official main protocol source/tests use `{ turnId, item }[]`. UI code that consumes item pages should tolerate both response shapes.
+
 ## Findings: Goals App-Server Workflow (2026-05-23)
 
 - Official Codex docs define `/goal` as a durable objective for long-running work. Supported user controls are set with `/goal <objective>`, view with `/goal`, pause with `/goal pause`, resume with `/goal resume`, and clear with `/goal clear`.
