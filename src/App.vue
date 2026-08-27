@@ -348,6 +348,8 @@
                     :workspace-messages="workspaceMessages"
                     :is-consuming-rate-limit-reset-credit="isConsumingRateLimitResetCredit"
                     :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
+                    :disabled="isSelectedThreadExternallyActive"
+                    :read-only-message="isSelectedThreadExternallyActive ? 'This thread is running in another Codex client. You can read its live progress here; sending will unlock when that turn finishes.' : ''"
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
                     :dictation-click-to-toggle="dictationClickToToggle"
@@ -441,6 +443,7 @@ const {
   selectedThreadGoal,
   selectedThreadGoalError,
   isSelectedThreadGoalPending,
+  isSelectedThreadExternallyActive,
   selectedThreadId,
   availableCollaborationModes,
   availableModels,

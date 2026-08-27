@@ -4,6 +4,10 @@
       {{ dictationErrorText }}
     </p>
 
+    <p v-if="props.readOnlyMessage" class="thread-composer-read-only-notice" role="status">
+      {{ props.readOnlyMessage }}
+    </p>
+
     <div class="thread-composer-shell" :class="{ 'thread-composer-shell--no-top-radius': hasQueueAbove }">
       <div
         v-if="workspaceMessageText"
@@ -470,6 +474,7 @@ const props = defineProps<{
   isTurnInProgress?: boolean
   isInterruptingTurn?: boolean
   disabled?: boolean
+  readOnlyMessage?: string
   hasQueueAbove?: boolean
   sendWithEnter?: boolean
   inProgressSubmitMode?: 'steer' | 'queue'
@@ -682,7 +687,9 @@ const dictationDurationLabel = computed(() => {
 })
 
 const placeholderText = computed(() =>
-  !props.activeThreadId
+  props.readOnlyMessage
+    ? 'This thread is active elsewhere'
+    : !props.activeThreadId
     ? 'Select a thread to send a message'
     : isPlanModeWaitingForModel.value
       ? 'Loading models for plan mode...'
@@ -2097,6 +2104,10 @@ watch(
 
 .thread-composer-dictation-error {
   @apply mb-2 px-1 text-xs text-amber-700;
+}
+
+.thread-composer-read-only-notice {
+  @apply mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900;
 }
 
 .thread-composer-submit {

@@ -1048,6 +1048,11 @@ export function useDesktopState() {
     const threadId = selectedThreadId.value
     return Boolean(threadId && threadGoalActionPendingByThreadId.value[threadId] === true)
   })
+  const isSelectedThreadExternallyActive = computed(() => {
+    const threadId = selectedThreadId.value
+    if (!threadId || inProgressById.value[threadId] !== true) return false
+    return resumedThreadById.value[threadId] !== true
+  })
   const messages = computed<UiMessage[]>(() => {
     const threadId = selectedThreadId.value
     if (!threadId) return []
@@ -3620,6 +3625,13 @@ export function useDesktopState() {
     const isInProgress = inProgressById.value[threadId] === true
     const clientUserMessageId = createClientUserMessageId()
 
+    if (isInProgress && resumedThreadById.value[threadId] !== true) {
+      const errorMessage = 'This thread is running in another Codex client. Wait for it to finish before sending a message.'
+      setTurnErrorForThread(threadId, errorMessage)
+      error.value = errorMessage
+      return
+    }
+
     if (isInProgress && mode === 'queue') {
       const queue = queuedMessagesByThreadId.value[threadId] ?? []
       const id = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -4461,6 +4473,7 @@ export function useDesktopState() {
     selectedThreadGoal,
     selectedThreadGoalError,
     isSelectedThreadGoalPending,
+    isSelectedThreadExternallyActive,
     selectedThreadId,
     availableCollaborationModes,
     availableModels,
