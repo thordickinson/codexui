@@ -902,8 +902,16 @@ function pickWeeklyQuotaWindow(account: UiAccountEntry) {
 
 function formatResetDateCompact(resetsAt: number | null): string {
   if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return ''
-  const date = new Date(resetsAt * 1000)
-  return `${date.getMonth() + 1}月${date.getDate()}日`
+  const diffMs = resetsAt * 1000 - Date.now()
+  if (diffMs <= 0) return 'se reinicia ahora'
+
+  const totalMinutes = Math.max(1, Math.round(diffMs / 60000))
+  if (totalMinutes < 60) return `se reinicia en ${totalMinutes} min`
+
+  const totalHours = Math.max(1, Math.round(totalMinutes / 60))
+  if (totalHours < 48) return `se reinicia en ${totalHours} h`
+
+  return `se reinicia en ${Math.max(1, Math.round(totalHours / 24))} d`
 }
 
 function resolveDisplayedQuota(account: UiAccountEntry): UiRateLimitSnapshot | null {

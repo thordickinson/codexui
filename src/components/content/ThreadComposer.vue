@@ -594,8 +594,18 @@ let fileMentionDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let isHoldPressActive = false
 const CONTEXT_WINDOW_BASELINE_TOKENS = 12000
 
+const COMPACT_REASONING_LABELS: Record<ReasoningEffort, string> = {
+  none: 'N',
+  minimal: 'Min',
+  low: 'L',
+  medium: 'M',
+  high: 'H',
+  xhigh: 'XH',
+}
+
 const reasoningOptions = computed<Array<{ value: ReasoningEffort; label: string }>>(() =>
-  buildReasoningEffortOptions(props.models, props.selectedModel, false) as Array<{ value: ReasoningEffort; label: string }>,
+  (buildReasoningEffortOptions(props.models, props.selectedModel, false) as Array<{ value: ReasoningEffort; label: string }>)
+    .map((option) => ({ ...option, label: COMPACT_REASONING_LABELS[option.value] })),
 )
 const modelOptions = computed(() =>
   props.models.map((model) => ({ value: model.id, label: model.displayName })),
@@ -745,21 +755,21 @@ function formatResetTime(resetsAt: number | null): string {
   if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return ''
   const resetMs = resetsAt * 1000
   const diffMs = resetMs - Date.now()
-  if (diffMs <= 0) return 'resetting now'
+  if (diffMs <= 0) return 'se reinicia ahora'
 
   const totalMinutes = Math.round(diffMs / 60000)
-  if (totalMinutes < 60) return `resets in ${Math.max(1, totalMinutes)}m`
+  if (totalMinutes < 60) return `se reinicia en ${Math.max(1, totalMinutes)} min`
 
   const totalHours = Math.round(totalMinutes / 60)
-  if (totalHours < 48) return `resets in ${Math.max(1, totalHours)}h`
+  if (totalHours < 48) return `se reinicia en ${Math.max(1, totalHours)} h`
 
   const totalDays = Math.round(totalHours / 24)
-  return `resets in ${Math.max(1, totalDays)}d`
+  return `se reinicia en ${Math.max(1, totalDays)} d`
 }
 
 function formatResetDate(resetsAt: number | null): string {
   if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return ''
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat('es-CO', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
@@ -769,9 +779,7 @@ function formatResetDate(resetsAt: number | null): string {
 }
 
 function formatResetDateCompact(resetsAt: number | null): string {
-  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return ''
-  const date = new Date(resetsAt * 1000)
-  return `${date.getMonth() + 1}月${date.getDate()}日`
+  return formatResetTime(resetsAt)
 }
 
 function pickWeeklyQuotaWindow(quota: UiRateLimitSnapshot): UiRateLimitWindow | null {
@@ -1925,7 +1933,7 @@ watch(
 }
 
 .thread-composer-controls {
-  @apply relative mt-2 flex flex-wrap items-center gap-2 overflow-visible sm:mt-3 sm:flex-nowrap sm:gap-4;
+  @apply relative mt-2 flex flex-nowrap items-center gap-1 overflow-visible sm:mt-3 sm:gap-4;
 }
 
 .thread-composer-controls--recording {
@@ -1953,11 +1961,19 @@ watch(
 }
 
 .thread-composer-control :deep(.composer-dropdown-value) {
-  @apply max-w-28 truncate sm:max-w-none;
+  @apply max-w-16 truncate text-xs sm:max-w-none sm:text-sm;
 }
 
 .thread-composer-model-controls {
-  @apply flex min-w-0 max-w-full items-center gap-2 rounded-lg bg-zinc-100 px-2 py-1;
+  @apply flex min-w-0 flex-1 items-center gap-1 rounded-lg bg-zinc-100 px-1.5 py-1 sm:flex-none sm:gap-2 sm:px-2;
+}
+
+.thread-composer-model-controls .thread-composer-control:first-child :deep(.composer-dropdown-value) {
+  @apply max-w-20 sm:max-w-none;
+}
+
+.thread-composer-model-controls .thread-composer-control:last-child :deep(.composer-dropdown-value) {
+  @apply max-w-8 sm:max-w-none;
 }
 
 .thread-composer-model-controls-divider {
@@ -2075,7 +2091,7 @@ watch(
 }
 
 .thread-composer-actions {
-  @apply ml-auto flex min-w-0 items-center gap-2;
+  @apply ml-auto flex shrink-0 items-center gap-1 sm:gap-2;
 }
 
 .thread-composer-actions--recording {
