@@ -3291,14 +3291,6 @@ export function useDesktopState() {
     }
 
     try {
-      if (resumedThreadById.value[threadId] !== true) {
-        await resumeThread(threadId)
-        resumedThreadById.value = {
-          ...resumedThreadById.value,
-          [threadId]: true,
-        }
-      }
-
       void refreshThreadGoal(threadId)
       const { messages: nextMessages, inProgress, turnIndexByTurnId } = await getThreadDetail(threadId)
       replaceTurnIndexLookupForThread(threadId, turnIndexByTurnId)
