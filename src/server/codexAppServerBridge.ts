@@ -108,6 +108,33 @@ function readNonEmptyString(value: unknown): string {
   return typeof value === 'string' && value.trim().length > 0 ? value : ''
 }
 
+function isWriterLockHeld(lockPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn('flock', ['-n', lockPath, '-c', 'true'], { stdio: 'ignore' })
+    child.once('error', () => resolve(false))
+    child.once('close', (code) => resolve(code !== 0))
+  })
+}
+
+async function readActiveWriterThreadIds(): Promise<string[]> {
+  const lockDirectory = join(homedir(), '.codex', 'thread-writer-locks')
+  let entries: string[]
+  try {
+    entries = await readdir(lockDirectory)
+  } catch {
+    return []
+  }
+
+  const lockEntries = entries
+    .filter((entry) => /^[0-9a-f-]+\.lock$/iu.test(entry))
+    .map((entry) => ({ threadId: entry.slice(0, -'.lock'.length), lockPath: join(lockDirectory, entry) }))
+  const lockStates = await Promise.all(lockEntries.map(async ({ threadId, lockPath }) => ({
+    threadId,
+    held: await isWriterLockHeld(lockPath),
+  })))
+  return lockStates.filter(({ held }) => held).map(({ threadId }) => threadId)
+}
+
 function countRecoveredContentLines(value: string): number {
   if (!value) return 0
   const normalized = value.replace(/\r\n/g, '\n')
@@ -1531,6 +1558,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
         const result = await appServer.rpc(body.method, body.params ?? null)
         setJson(res, 200, { result })
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/thread-activity') {
+        setJson(res, 200, { activeThreadIds: await readActiveWriterThreadIds() })
         return
       }
 

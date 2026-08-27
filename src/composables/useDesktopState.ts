@@ -11,6 +11,7 @@ import {
   listPermissionProfiles,
   renameThread,
   getCurrentModelConfig,
+  getActiveWriterThreadIds,
   getPendingServerRequests,
   getSkillsList,
   getThreadDetail,
@@ -902,6 +903,7 @@ export function useDesktopState() {
   const liveCommandsByThreadId = ref<Record<string, UiMessage[]>>({})
   const liveFileChangeMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
   const inProgressById = ref<Record<string, boolean>>({})
+  const activeWriterThreadById = ref<Record<string, boolean>>({})
   type FileAttachment = { label: string; path: string; fsPath: string }
   type QueuedMessage = {
     id: string
@@ -1719,6 +1721,26 @@ export function useDesktopState() {
     } else {
       inProgressById.value = omitKey(inProgressById.value, threadId)
     }
+    applyThreadFlags()
+  }
+
+  function syncActiveWriterThreads(threadIds: string[]): void {
+    const nextActiveWriterThreadById = Object.fromEntries(
+      threadIds.filter((threadId) => threadId.length > 0).map((threadId) => [threadId, true]),
+    ) as Record<string, boolean>
+    const previousActiveWriterThreadById = activeWriterThreadById.value
+    activeWriterThreadById.value = nextActiveWriterThreadById
+
+    const nextInProgressById = { ...inProgressById.value }
+    for (const threadId of Object.keys(previousActiveWriterThreadById)) {
+      if (!nextActiveWriterThreadById[threadId]) {
+        delete nextInProgressById[threadId]
+      }
+    }
+    for (const threadId of Object.keys(nextActiveWriterThreadById)) {
+      nextInProgressById[threadId] = true
+    }
+    inProgressById.value = nextInProgressById
     applyThreadFlags()
   }
 
@@ -4269,6 +4291,8 @@ export function useDesktopState() {
 
     try {
       await loadThreads()
+      const activeWriterThreadIds = await getActiveWriterThreadIds()
+      syncActiveWriterThreads(activeWriterThreadIds)
 
       if (!selectedThreadId.value) return
 
@@ -4281,6 +4305,7 @@ export function useDesktopState() {
       if (isInProgress || hasVersionChange) {
         await loadMessages(threadId, { silent: true })
       }
+      syncActiveWriterThreads(activeWriterThreadIds)
     } catch {
       // ignore poll failures and keep last known state
     } finally {

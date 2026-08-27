@@ -973,6 +973,15 @@ export async function getPendingServerRequests(): Promise<unknown[]> {
   return fetchPendingServerRequests()
 }
 
+export async function getActiveWriterThreadIds(): Promise<string[]> {
+  const response = await fetch('/codex-api/thread-activity')
+  if (!response.ok) throw new Error('Failed to read active thread status')
+  const payload = (await response.json()) as { activeThreadIds?: unknown }
+  return Array.isArray(payload.activeThreadIds)
+    ? payload.activeThreadIds.filter((threadId): threadId is string => typeof threadId === 'string')
+    : []
+}
+
 export async function getAccountRateLimits(): Promise<UiRateLimitSnapshot | null> {
   try {
     const payload = await callRpc<unknown>('account/rateLimits/read')
