@@ -17,7 +17,12 @@
           >
             <template #left>
               <span class="thread-left-stack">
-                <span v-if="thread.inProgress || thread.unread" class="thread-status-indicator" :data-state="getThreadState(thread)" />
+                <span
+                  v-if="thread.inProgress || thread.unread"
+                  class="thread-status-indicator"
+                  :data-state="getThreadState(thread)"
+                  :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
+                />
                 <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
                   <IconTablerPin class="thread-icon" />
                 </button>
@@ -113,6 +118,7 @@
                 v-if="thread.inProgress || thread.unread"
                 class="thread-status-indicator"
                 :data-state="getThreadState(thread)"
+                :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
               />
               <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
                 <IconTablerPin class="thread-icon" />
@@ -317,6 +323,7 @@
                       v-if="thread.inProgress || thread.unread"
                       class="thread-status-indicator"
                       :data-state="getThreadState(thread)"
+                      :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
                     />
                     <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
                       <IconTablerPin class="thread-icon" />

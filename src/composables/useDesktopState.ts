@@ -86,6 +86,7 @@ const MODEL_PREFERENCE_STORAGE_KEY = 'codex-web-local.model-preference-by-contex
 const PERMISSION_PROFILE_STORAGE_KEY = 'codex-web-local.permission-profile-by-thread.v1'
 const NEW_THREAD_COLLABORATION_MODE_CONTEXT = '__new-thread__'
 const EVENT_SYNC_DEBOUNCE_MS = 220
+const THREAD_STATUS_POLL_INTERVAL_MS = 4_000
 const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 
@@ -984,6 +985,7 @@ export function useDesktopState() {
   const hasLoadedThreads = ref(false)
   let stopNotificationStream: (() => void) | null = null
   let eventSyncTimer: number | null = null
+  let threadStatusPollTimer: number | null = null
   let pendingThreadsRefresh = false
   const pendingThreadMessageRefresh = new Set<string>()
   let hasHydratedWorkspaceRootsState = false
@@ -4353,6 +4355,12 @@ export function useDesktopState() {
 
     if (stopNotificationStream) return
     void loadPendingServerRequestsFromBridge()
+    void syncThreadStatus()
+    threadStatusPollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void syncThreadStatus()
+      }
+    }, THREAD_STATUS_POLL_INTERVAL_MS)
     stopNotificationStream = subscribeCodexNotifications((notification) => {
       if (notification.method === 'ready') {
         clearAllTransientTurnErrors()
@@ -4402,6 +4410,10 @@ export function useDesktopState() {
     if (eventSyncTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(eventSyncTimer)
       eventSyncTimer = null
+    }
+    if (threadStatusPollTimer !== null && typeof window !== 'undefined') {
+      window.clearInterval(threadStatusPollTimer)
+      threadStatusPollTimer = null
     }
     activeReasoningItemId = ''
     shouldAutoScrollOnNextAgentEvent = false
