@@ -12,13 +12,15 @@
 
     <div
       v-if="isOpen"
+      ref="menuWrapRef"
       class="composer-dropdown-menu-wrap"
       :class="{
         'composer-dropdown-menu-wrap-up': openDirection === 'up',
         'composer-dropdown-menu-wrap-down': openDirection === 'down',
       }"
+      :style="menuWrapStyle"
     >
-      <div class="composer-dropdown-menu">
+      <div ref="menuRef" class="composer-dropdown-menu">
         <div v-if="enableSearch" class="composer-dropdown-search-wrap">
           <input
             ref="searchInputRef"
@@ -91,6 +93,7 @@ const props = defineProps<{
   placeholder?: string
   disabled?: boolean
   openDirection?: 'up' | 'down'
+  menuAlign?: 'start' | 'end'
   enableSearch?: boolean
   searchPlaceholder?: string
   showAddAction?: boolean
@@ -107,12 +110,16 @@ const emit = defineEmits<{
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
+const menuWrapRef = ref<HTMLElement | null>(null)
+const menuRef = ref<HTMLElement | null>(null)
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const addInputRef = ref<HTMLInputElement | null>(null)
 const isOpen = ref(false)
 const searchQuery = ref('')
 const isAdding = ref(false)
 const addDraft = ref('')
+const menuWrapStyle = ref<Record<string, string>>({})
+let isLayoutListenerAttached = false
 
 const selectedLabel = computed(() => {
   const selected = props.options.find((option) => option.value === props.modelValue)
@@ -121,6 +128,7 @@ const selectedLabel = computed(() => {
 })
 
 const openDirection = computed(() => props.openDirection ?? 'down')
+const menuAlign = computed(() => props.menuAlign ?? 'start')
 const enableSearch = computed(() => props.enableSearch === true)
 const showAddAction = computed(() => props.showAddAction === true)
 const searchPlaceholderText = computed(() => props.searchPlaceholder?.trim() || 'Quick search projects')
@@ -138,6 +146,52 @@ const filteredOptions = computed(() => {
 function onToggle(): void {
   if (props.disabled) return
   isOpen.value = !isOpen.value
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function updateMenuPosition(): void {
+  if (!isOpen.value || typeof window === 'undefined') return
+  const root = rootRef.value
+  if (!root) return
+
+  const rect = root.getBoundingClientRect()
+  const viewportPadding = 8
+  const gap = 8
+  const maxMenuWidth = Math.max(0, window.innerWidth - viewportPadding * 2)
+  const measuredWidth = menuRef.value?.offsetWidth ?? menuWrapRef.value?.offsetWidth ?? 224
+  const measuredHeight = menuRef.value?.offsetHeight ?? menuWrapRef.value?.offsetHeight ?? 0
+  const menuWidth = Math.min(measuredWidth, maxMenuWidth)
+  const maxLeft = Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding)
+  const desiredLeft = menuAlign.value === 'end' ? rect.right - menuWidth : rect.left
+  const left = clamp(desiredLeft, viewportPadding, maxLeft)
+  let top = openDirection.value === 'up' ? rect.top - measuredHeight - gap : rect.bottom + gap
+  if (measuredHeight > 0 && top + measuredHeight > window.innerHeight - viewportPadding) {
+    top = window.innerHeight - measuredHeight - viewportPadding
+  }
+
+  menuWrapStyle.value = {
+    position: 'fixed',
+    left: `${left}px`,
+    top: `${Math.max(viewportPadding, top)}px`,
+    width: `${menuWidth}px`,
+  }
+}
+
+function addLayoutListeners(): void {
+  if (isLayoutListenerAttached || typeof window === 'undefined') return
+  window.addEventListener('resize', updateMenuPosition)
+  window.addEventListener('scroll', updateMenuPosition, true)
+  isLayoutListenerAttached = true
+}
+
+function removeLayoutListeners(): void {
+  if (!isLayoutListenerAttached || typeof window === 'undefined') return
+  window.removeEventListener('resize', updateMenuPosition)
+  window.removeEventListener('scroll', updateMenuPosition, true)
+  isLayoutListenerAttached = false
 }
 
 function onSelect(value: string): void {
@@ -201,10 +255,16 @@ watch(isOpen, (open) => {
   if (!open) {
     isAdding.value = false
     addDraft.value = ''
+    removeLayoutListeners()
+    menuWrapStyle.value = {}
     return
   }
-  if (!enableSearch.value) return
-  nextTick(() => searchInputRef.value?.focus())
+  addLayoutListeners()
+  nextTick(() => {
+    updateMenuPosition()
+    window.requestAnimationFrame(updateMenuPosition)
+    if (enableSearch.value) searchInputRef.value?.focus()
+  })
 })
 
 onMounted(() => {
@@ -213,6 +273,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', onDocumentPointerDown)
+  removeLayoutListeners()
 })
 </script>
 
@@ -252,7 +313,7 @@ onBeforeUnmount(() => {
 }
 
 .composer-dropdown-menu {
-  @apply m-0 min-w-56 rounded-xl border border-zinc-200 bg-white p-1 shadow-lg;
+  @apply m-0 min-w-56 max-w-[calc(100vw-1rem)] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg;
 }
 
 .composer-dropdown-search-wrap {

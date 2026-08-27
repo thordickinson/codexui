@@ -287,25 +287,30 @@
             </span>
           </button>
 
-          <ComposerDropdown
-            class="thread-composer-control"
-            :model-value="selectedModel"
-            :options="modelOptions"
-            placeholder="Model"
-            open-direction="up"
-            :disabled="disabled || !activeThreadId || models.length === 0 || isTurnInProgress"
-            @update:model-value="onModelSelect"
-          />
+          <div class="thread-composer-model-controls">
+            <ComposerDropdown
+              class="thread-composer-control"
+              :model-value="selectedModel"
+              :options="modelOptions"
+              placeholder="Model"
+              open-direction="up"
+              :disabled="disabled || !activeThreadId || models.length === 0 || isTurnInProgress"
+              @update:model-value="onModelSelect"
+            />
 
-          <ComposerDropdown
-            class="thread-composer-control"
-            :model-value="selectedReasoningEffort"
-            :options="reasoningOptions"
-            placeholder="Thinking"
-            open-direction="up"
-            :disabled="disabled || !activeThreadId || isTurnInProgress"
-            @update:model-value="onReasoningEffortSelect"
-          />
+            <span class="thread-composer-model-controls-divider" aria-hidden="true" />
+
+            <ComposerDropdown
+              class="thread-composer-control"
+              :model-value="selectedReasoningEffort"
+              :options="reasoningOptions"
+              placeholder="Thinking"
+              open-direction="up"
+              menu-align="end"
+              :disabled="disabled || !activeThreadId || isTurnInProgress"
+              @update:model-value="onReasoningEffortSelect"
+            />
+          </div>
         </template>
 
         <div
@@ -1920,7 +1925,7 @@ watch(
 }
 
 .thread-composer-controls {
-  @apply relative mt-2 sm:mt-3 flex items-center gap-2 sm:gap-4 overflow-visible;
+  @apply relative mt-2 flex flex-wrap items-center gap-2 overflow-visible sm:mt-3 sm:flex-nowrap sm:gap-4;
 }
 
 .thread-composer-controls--recording {
@@ -1948,7 +1953,15 @@ watch(
 }
 
 .thread-composer-control :deep(.composer-dropdown-value) {
-  @apply truncate;
+  @apply max-w-28 truncate sm:max-w-none;
+}
+
+.thread-composer-model-controls {
+  @apply flex min-w-0 max-w-full items-center gap-2 rounded-lg bg-zinc-100 px-2 py-1;
+}
+
+.thread-composer-model-controls-divider {
+  @apply h-4 w-px shrink-0 bg-zinc-300;
 }
 
 .thread-composer-goal-control {
