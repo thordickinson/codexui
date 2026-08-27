@@ -1,4 +1,17 @@
-# AGENTS.md
+# Codex UI: project guide
+
+## Purpose and product direction
+
+This is a browser UI for the Codex app-server, operated as a user-level Linux
+service. Its users connect over the private VPN/LAN; it is not intended to be a
+public internet service. Binding to all interfaces is acceptable when the host
+firewall restricts the port to the VPN interface. Do not add a public tunnel or
+internet exposure unless the owner explicitly requests it.
+
+Priorities are compatibility with the current Codex app-server protocol, a
+practical mobile composer, and reliable voice input. Voice messages should be
+recorded, transcribed, and inserted into the composer for review before they
+are sent. Preserve the ability to restart the service cleanly after updates.
 
 ## Build And Restart Runbook
 
