@@ -287,6 +287,17 @@
             </span>
           </button>
 
+          <button
+            class="thread-composer-model-mobile-trigger"
+            type="button"
+            :disabled="disabled || !activeThreadId || isTurnInProgress"
+            aria-label="Choose model and reasoning effort"
+            @click="isModelSettingsOpen = true"
+          >
+            <span class="thread-composer-model-mobile-model">{{ selectedModelLabel }}</span>
+            <span class="thread-composer-model-mobile-effort">{{ selectedReasoningLabel }}</span>
+          </button>
+
           <div class="thread-composer-model-controls">
             <ComposerDropdown
               class="thread-composer-control"
@@ -419,6 +430,45 @@
       :disabled="isInteractionDisabled"
       @change="onFolderPickerChange"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="isModelSettingsOpen"
+        class="thread-composer-model-sheet-backdrop"
+        @click.self="isModelSettingsOpen = false"
+      >
+        <section class="thread-composer-model-sheet" role="dialog" aria-modal="true" aria-label="Model settings">
+          <div class="thread-composer-model-sheet-header">
+            <h2>Model settings</h2>
+            <button type="button" aria-label="Close model settings" @click="isModelSettingsOpen = false">×</button>
+          </div>
+
+          <p class="thread-composer-model-sheet-label">Model</p>
+          <div class="thread-composer-model-sheet-options">
+            <button
+              v-for="option in modelOptions"
+              :key="option.value"
+              type="button"
+              :class="{ 'is-selected': option.value === selectedModel }"
+              @click="onModelSelect(option.value)"
+            >{{ option.label }}</button>
+          </div>
+
+          <p class="thread-composer-model-sheet-label">Reasoning effort</p>
+          <div class="thread-composer-model-sheet-options thread-composer-model-sheet-options--effort">
+            <button
+              v-for="option in reasoningOptions"
+              :key="option.value"
+              type="button"
+              :class="{ 'is-selected': option.value === selectedReasoningEffort }"
+              @click="onReasoningEffortSelect(option.value)"
+            >{{ option.label }}</button>
+          </div>
+
+          <button class="thread-composer-model-sheet-done" type="button" @click="isModelSettingsOpen = false">Done</button>
+        </section>
+      </div>
+    </Teleport>
   </form>
 </template>
 
@@ -538,6 +588,7 @@ const folderUploadGroups = ref<FolderUploadGroup[]>([])
 const isGoalModeSelected = ref(false)
 const isGoalEditModeSelected = ref(false)
 const isGoalMenuOpen = ref(false)
+const isModelSettingsOpen = ref(false)
 const pendingGoalReplacement = ref<SetGoalCommand | null>(null)
 
 const dictationFeedback = ref('')
@@ -609,6 +660,12 @@ const reasoningOptions = computed<Array<{ value: ReasoningEffort; label: string 
 )
 const modelOptions = computed(() =>
   props.models.map((model) => ({ value: model.id, label: model.displayName })),
+)
+const selectedModelLabel = computed(() =>
+  modelOptions.value.find((option) => option.value === props.selectedModel)?.label ?? 'Model',
+)
+const selectedReasoningLabel = computed(() =>
+  reasoningOptions.value.find((option) => option.value === props.selectedReasoningEffort)?.label ?? 'Effort',
 )
 const isPlanModeSelected = computed(() => props.selectedCollaborationMode === 'plan')
 const threadGoal = computed(() => props.threadGoal ?? null)
@@ -1965,7 +2022,67 @@ watch(
 }
 
 .thread-composer-model-controls {
-  @apply flex min-w-0 flex-1 items-center gap-1 rounded-lg bg-zinc-100 px-1.5 py-1 sm:flex-none sm:gap-2 sm:px-2;
+  @apply hidden min-w-0 flex-1 items-center gap-1 rounded-lg bg-zinc-100 px-1.5 py-1 sm:flex sm:flex-none sm:gap-2 sm:px-2;
+}
+
+.thread-composer-model-mobile-trigger {
+  @apply inline-flex min-w-0 flex-1 items-center gap-1 rounded-lg bg-zinc-100 px-2 py-1 text-xs text-zinc-700 disabled:cursor-not-allowed disabled:text-zinc-400 sm:hidden;
+}
+
+.thread-composer-model-mobile-model {
+  @apply min-w-0 truncate;
+}
+
+.thread-composer-model-mobile-effort {
+  @apply shrink-0 rounded bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-500;
+}
+
+.thread-composer-model-sheet-backdrop {
+  @apply fixed inset-0 z-[70] flex items-end bg-zinc-950/30 p-2 sm:hidden;
+}
+
+.thread-composer-model-sheet {
+  @apply w-full rounded-2xl bg-white p-4 shadow-2xl;
+}
+
+.thread-composer-model-sheet-header {
+  @apply mb-4 flex items-center justify-between;
+}
+
+.thread-composer-model-sheet-header h2 {
+  @apply m-0 text-base font-semibold text-zinc-900;
+}
+
+.thread-composer-model-sheet-header button {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-full border-0 bg-zinc-100 p-0 text-xl leading-none text-zinc-600;
+}
+
+.thread-composer-model-sheet-label {
+  @apply mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500;
+}
+
+.thread-composer-model-sheet-options {
+  @apply mb-4 grid grid-cols-1 gap-2;
+}
+
+.thread-composer-model-sheet-options button {
+  @apply rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-left text-sm text-zinc-700;
+}
+
+.thread-composer-model-sheet-options button.is-selected {
+  @apply border-sky-500 bg-sky-50 text-sky-800;
+}
+
+.thread-composer-model-sheet-options--effort {
+  @apply grid-cols-3;
+}
+
+.thread-composer-model-sheet-options--effort button {
+  @apply text-center;
+}
+
+.thread-composer-model-sheet-done {
+  @apply w-full rounded-xl border-0 bg-zinc-900 px-3 py-2.5 text-sm font-medium text-white;
 }
 
 .thread-composer-model-controls .thread-composer-control:first-child :deep(.composer-dropdown-value) {
