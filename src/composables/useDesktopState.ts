@@ -12,6 +12,7 @@ import {
   renameThread,
   getCurrentModelConfig,
   getActiveWriterThreadIds,
+  getThreadInProgress,
   getPendingServerRequests,
   getSkillsList,
   getThreadDetail,
@@ -1724,24 +1725,29 @@ export function useDesktopState() {
     applyThreadFlags()
   }
 
-  function syncActiveWriterThreads(threadIds: string[]): void {
+  async function syncActiveWriterThreads(): Promise<void> {
+    const threadIds = await getActiveWriterThreadIds()
     const nextActiveWriterThreadById = Object.fromEntries(
       threadIds.filter((threadId) => threadId.length > 0).map((threadId) => [threadId, true]),
     ) as Record<string, boolean>
     const previousActiveWriterThreadById = activeWriterThreadById.value
     activeWriterThreadById.value = nextActiveWriterThreadById
 
-    const nextInProgressById = { ...inProgressById.value }
-    for (const threadId of Object.keys(previousActiveWriterThreadById)) {
-      if (!nextActiveWriterThreadById[threadId]) {
-        delete nextInProgressById[threadId]
+    const threadIdsToCheck = Array.from(new Set([
+      ...Object.keys(previousActiveWriterThreadById),
+      ...Object.keys(nextActiveWriterThreadById),
+    ]))
+    const states = await Promise.allSettled(threadIdsToCheck.map(async (threadId) => ({
+      threadId,
+      inProgress: nextActiveWriterThreadById[threadId] === true
+        ? await getThreadInProgress(threadId)
+        : false,
+    })))
+    for (const state of states) {
+      if (state.status === 'fulfilled') {
+        setThreadInProgress(state.value.threadId, state.value.inProgress)
       }
     }
-    for (const threadId of Object.keys(nextActiveWriterThreadById)) {
-      nextInProgressById[threadId] = true
-    }
-    inProgressById.value = nextInProgressById
-    applyThreadFlags()
   }
 
   function markThreadUnreadByEvent(threadId: string): void {
@@ -4291,8 +4297,7 @@ export function useDesktopState() {
 
     try {
       await loadThreads()
-      const activeWriterThreadIds = await getActiveWriterThreadIds()
-      syncActiveWriterThreads(activeWriterThreadIds)
+      await syncActiveWriterThreads()
 
       if (!selectedThreadId.value) return
 
@@ -4305,7 +4310,6 @@ export function useDesktopState() {
       if (isInProgress || hasVersionChange) {
         await loadMessages(threadId, { silent: true })
       }
-      syncActiveWriterThreads(activeWriterThreadIds)
     } catch {
       // ignore poll failures and keep last known state
     } finally {

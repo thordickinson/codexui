@@ -593,6 +593,16 @@ async function listThreadTurns(threadId: string): Promise<Turn[]> {
   return hydratedTurns
 }
 
+export async function getThreadInProgress(threadId: string): Promise<boolean> {
+  const payload = await callRpc<ThreadTurnsListResponse>('thread/turns/list', {
+    threadId,
+    limit: 1,
+    sortDirection: 'desc',
+    itemsView: 'summary',
+  })
+  return readThreadInProgressFromTurns(Array.isArray(payload.data) ? payload.data : [])
+}
+
 function normalizeReasoningEffort(value: unknown): ReasoningEffort | '' {
   const allowed: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
   return typeof value === 'string' && allowed.includes(value as ReasoningEffort)
