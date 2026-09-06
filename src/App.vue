@@ -76,7 +76,7 @@
 
           <SidebarThreadTree :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
             v-if="!isSidebarCollapsed"
-            :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
+            :selected-thread-id="sidebarSelectedThreadId" :is-loading="isLoadingThreads"
             :search-query="sidebarSearchQuery"
             :search-matched-thread-ids="serverMatchedThreadIds"
             :project-git-state-by-id="projectGitStateById"
@@ -306,8 +306,18 @@
           </template>
           <template v-else>
             <div class="content-grid">
+              <div
+                v-if="isThreadRouteLoading"
+                class="thread-route-loading"
+                role="status"
+                aria-live="polite"
+              >
+                <span class="thread-route-loading-spinner" aria-hidden="true" />
+                <span>Loading conversation…</span>
+              </div>
+
               <ReviewPane
-                v-if="isReviewPaneOpen && selectedThreadId && composerCwd"
+                v-else-if="isReviewPaneOpen && selectedThreadId && composerCwd"
                 :thread-id="selectedThreadId"
                 :cwd="composerCwd"
                 :is-thread-in-progress="isSelectedThreadInProgress"
@@ -576,6 +586,14 @@ const isPluginsRoute = computed(() => route.name === 'plugins')
 const isAutomationsRoute = computed(() => route.name === 'automations')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isFilesRoute = computed(() => route.name === 'files')
+const sidebarSelectedThreadId = computed(() => (
+  route.name === 'thread' && routeThreadId.value ? routeThreadId.value : selectedThreadId.value
+))
+const isThreadRouteLoading = computed(() => (
+  route.name === 'thread'
+  && Boolean(routeThreadId.value)
+  && (routeThreadId.value !== selectedThreadId.value || isLoadingMessages.value)
+))
 const contentTitle = computed(() => {
   if (isPluginsRoute.value) return 'Plugins'
   if (isAutomationsRoute.value) return 'Automations'
@@ -2044,6 +2062,27 @@ async function submitFirstMessageForNewThread(
 
 .content-thread {
   @apply flex-1 min-h-0;
+}
+
+.thread-route-loading {
+  @apply flex-1 min-h-0 flex items-center justify-center gap-2 text-sm text-zinc-500;
+}
+
+.thread-route-loading-spinner {
+  @apply h-4 w-4 rounded-full border-2 border-zinc-300 border-t-zinc-600;
+  animation: thread-route-loading-spin 700ms linear infinite;
+}
+
+@keyframes thread-route-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-route-loading-spinner {
+    animation-duration: 1400ms;
+  }
 }
 
 .composer-with-queue {
