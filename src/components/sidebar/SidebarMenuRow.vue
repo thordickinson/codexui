@@ -98,4 +98,14 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 .sidebar-menu-row[data-has-right='true'][data-force-right-hover='true'] .sidebar-menu-row-right-hover {
   @apply opacity-100 visible pointer-events-auto;
 }
+
+@media (hover: none) {
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-default {
+    @apply opacity-0 invisible pointer-events-none;
+  }
+
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-hover {
+    @apply opacity-100 visible pointer-events-auto;
+  }
+}
 </style>

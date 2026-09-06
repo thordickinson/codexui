@@ -388,10 +388,6 @@
   @apply bg-rose-500 text-white hover:bg-rose-400;
 }
 
-:root.dark .thread-pin-button {
-  @apply text-zinc-400;
-}
-
 :root.dark .message-bubble {
   @apply bg-zinc-800 text-zinc-200;
 }

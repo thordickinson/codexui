@@ -26,9 +26,6 @@
                   :data-state="getThreadState(thread)"
                   :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
                 />
-                <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)">
-                  <IconTablerPin class="thread-icon" />
-                </button>
               </span>
             </template>
             <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
@@ -101,7 +98,6 @@
               <template #left>
                 <span class="thread-left-stack">
                   <span v-if="thread.inProgress || thread.unread" class="thread-status-indicator" :data-state="getThreadState(thread)" :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'" />
-                  <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)"><IconTablerPin class="thread-icon" /></button>
                 </span>
               </template>
               <button class="thread-main-button" type="button" @click="onSelect(thread.id)"><span class="thread-row-title-wrap"><span class="thread-row-title">{{ thread.title }}</span><IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" /></span></button>
@@ -197,9 +193,6 @@
                 :data-state="getThreadState(thread)"
                 :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
               />
-              <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)">
-                <IconTablerPin class="thread-icon" />
-              </button>
             </span>
           </template>
           <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
@@ -411,9 +404,6 @@
                       :data-state="getThreadState(thread)"
                       :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
                     />
-                    <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)">
-                      <IconTablerPin class="thread-icon" />
-                    </button>
                   </span>
                 </template>
                 <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
@@ -469,6 +459,9 @@
         :data-open-direction="getThreadMenuDirection(openThreadMenuThread.id)"
         @click.stop
       >
+        <button class="thread-menu-item" type="button" @click="togglePinFromMenu(openThreadMenuThread.id)">
+          {{ getThreadPinLabel(openThreadMenuThread.id) }}
+        </button>
         <button class="thread-menu-item" type="button" @click="onExportThread(openThreadMenuThread.id)">
           Export chat
         </button>
@@ -965,7 +958,7 @@ function isPinned(threadId: string): boolean {
 }
 
 function getThreadPinLabel(threadId: string): string {
-  return isPinned(threadId) ? 'Unpin conversation' : 'Pin conversation'
+  return isPinned(threadId) ? 'Unpin thread' : 'Pin thread'
 }
 
 function togglePin(threadId: string): void {
@@ -975,6 +968,11 @@ function togglePin(threadId: string): void {
   }
 
   pinnedThreadIds.value = [threadId, ...pinnedThreadIds.value]
+}
+
+function togglePinFromMenu(threadId: string): void {
+  togglePin(threadId)
+  closeThreadMenu()
 }
 
 function isProjectPinned(projectName: string): boolean {
@@ -2094,10 +2092,6 @@ onBeforeUnmount(() => {
   @apply relative w-4 h-4 flex items-center justify-center;
 }
 
-.thread-pin-button {
-  @apply absolute inset-0 w-4 h-4 rounded text-zinc-500 opacity-0 pointer-events-none transition flex items-center justify-center;
-}
-
 .thread-main-button {
   @apply min-w-0 w-full text-left rounded px-0 py-0 flex items-center min-h-5;
 }
@@ -2180,11 +2174,6 @@ onBeforeUnmount(() => {
   @apply bg-zinc-200;
 }
 
-.thread-row:hover .thread-pin-button,
-.thread-row:focus-within .thread-pin-button {
-  @apply opacity-100 pointer-events-auto;
-}
-
 .thread-status-indicator[data-state='unread'] {
   width: 6.6667px;
   height: 6.6667px;
@@ -2193,13 +2182,6 @@ onBeforeUnmount(() => {
 
 .thread-status-indicator[data-state='working'] {
   @apply border-2 border-zinc-500 border-t-transparent bg-transparent animate-spin;
-}
-
-.thread-row:hover .thread-status-indicator[data-state='unread'],
-.thread-row:hover .thread-status-indicator[data-state='working'],
-.thread-row:focus-within .thread-status-indicator[data-state='unread'],
-.thread-row:focus-within .thread-status-indicator[data-state='working'] {
-  @apply opacity-0;
 }
 
 .rename-thread-overlay {
