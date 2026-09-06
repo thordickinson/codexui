@@ -122,7 +122,42 @@ function isWriterLockHeld(lockPath: string): Promise<boolean> {
   })
 }
 
-async function readActiveWriterThreadIds(): Promise<string[]> {
+function readWriterLockOwnerPids(): Promise<Map<string, number>> {
+  return new Promise((resolve) => {
+    const child = spawn('lslocks', ['--json', '--output', 'PID,PATH'], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let output = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      output += chunk
+    })
+    child.once('error', () => resolve(new Map()))
+    child.once('close', (code) => {
+      if (code !== 0) {
+        resolve(new Map())
+        return
+      }
+
+      try {
+        const payload = asRecord(JSON.parse(output) as unknown)
+        const locks = Array.isArray(payload?.locks) ? payload.locks : []
+        const ownerPidByPath = new Map<string, number>()
+        for (const lock of locks) {
+          const record = asRecord(lock)
+          const path = readNonEmptyString(record?.path)
+          const pid = typeof record?.pid === 'number' ? record.pid : Number(record?.pid)
+          if (path && Number.isInteger(pid) && pid > 0) {
+            ownerPidByPath.set(path, pid)
+          }
+        }
+        resolve(ownerPidByPath)
+      } catch {
+        resolve(new Map())
+      }
+    })
+  })
+}
+
+async function readActiveWriterThreadIds(bridgeWriterPid: number | null): Promise<string[]> {
   const lockDirectory = join(homedir(), '.codex', 'thread-writer-locks')
   let entries: string[]
   try {
@@ -134,9 +169,12 @@ async function readActiveWriterThreadIds(): Promise<string[]> {
   const lockEntries = entries
     .filter((entry) => /^[0-9a-f-]+\.lock$/iu.test(entry))
     .map((entry) => ({ threadId: entry.slice(0, -'.lock'.length), lockPath: join(lockDirectory, entry) }))
+  const ownerPidByPath = await readWriterLockOwnerPids()
   const lockStates = await Promise.all(lockEntries.map(async ({ threadId, lockPath }) => ({
     threadId,
-    held: await isWriterLockHeld(lockPath),
+    held: ownerPidByPath.has(lockPath)
+      ? ownerPidByPath.get(lockPath) !== bridgeWriterPid
+      : await isWriterLockHeld(lockPath),
   })))
   return lockStates.filter(({ held }) => held).map(({ threadId }) => threadId)
 }
@@ -1349,6 +1387,10 @@ class AppServerProcess {
     return Array.from(this.ownedThreadIds)
   }
 
+  get processId(): number | null {
+    return this.process?.pid ?? null
+  }
+
   onNotification(listener: (value: { method: string; params: unknown }) => void): () => void {
     this.notificationListeners.add(listener)
     return () => {
@@ -1626,20 +1668,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/thread-activity') {
-        const activeThreadIds = await readActiveWriterThreadIds()
+        const activeThreadIds = await readActiveWriterThreadIds(appServer.processId)
         const bridgeThreadIds = new Set(appServer.listOwnedThreadIds())
-        try {
-          const loadedThreadsResult = asRecord(await appServer.rpc('thread/loaded/list', {}))
-          const loadedThreadIds = Array.isArray(loadedThreadsResult?.data)
-            ? loadedThreadsResult.data.filter((threadId): threadId is string => typeof threadId === 'string')
-            : []
-          for (const threadId of loadedThreadIds) {
-            bridgeThreadIds.add(threadId)
-          }
-        } catch {
-          // Older app-server versions do not expose thread/loaded/list. In that case,
-          // Fall back to the threads this bridge observed itself acquiring.
-        }
         setJson(res, 200, {
           activeThreadIds: activeThreadIds.filter((threadId) => !bridgeThreadIds.has(threadId)),
         })
