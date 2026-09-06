@@ -1055,7 +1055,7 @@ export function useDesktopState() {
   })
   const isSelectedThreadExternallyActive = computed(() => {
     const threadId = selectedThreadId.value
-    if (!threadId || inProgressById.value[threadId] !== true) return false
+    if (!threadId || activeWriterThreadById.value[threadId] !== true) return false
     return resumedThreadById.value[threadId] !== true
   })
   const messages = computed<UiMessage[]>(() => {
@@ -3655,8 +3655,8 @@ export function useDesktopState() {
     const isInProgress = inProgressById.value[threadId] === true
     const clientUserMessageId = createClientUserMessageId()
 
-    if (isInProgress && resumedThreadById.value[threadId] !== true) {
-      const errorMessage = 'This thread is running in another Codex client. Wait for it to finish before sending a message.'
+    if (activeWriterThreadById.value[threadId] === true && resumedThreadById.value[threadId] !== true) {
+      const errorMessage = 'This thread is open in another Codex client. Close it there before sending a message here.'
       setTurnErrorForThread(threadId, errorMessage)
       error.value = errorMessage
       return

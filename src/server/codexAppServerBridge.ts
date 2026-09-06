@@ -1562,7 +1562,21 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/thread-activity') {
-        setJson(res, 200, { activeThreadIds: await readActiveWriterThreadIds() })
+        const activeThreadIds = await readActiveWriterThreadIds()
+        let bridgeThreadIds = new Set<string>()
+        try {
+          const loadedThreadsResult = asRecord(await appServer.rpc('thread/loaded/list', {}))
+          const loadedThreadIds = Array.isArray(loadedThreadsResult?.data)
+            ? loadedThreadsResult.data.filter((threadId): threadId is string => typeof threadId === 'string')
+            : []
+          bridgeThreadIds = new Set(loadedThreadIds)
+        } catch {
+          // Older app-server versions do not expose thread/loaded/list. In that case,
+          // conservatively treat every held writer lock as external.
+        }
+        setJson(res, 200, {
+          activeThreadIds: activeThreadIds.filter((threadId) => !bridgeThreadIds.has(threadId)),
+        })
         return
       }
 

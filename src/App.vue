@@ -349,7 +349,7 @@
                     :is-consuming-rate-limit-reset-credit="isConsumingRateLimitResetCredit"
                     :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
                     :disabled="isSelectedThreadExternallyActive"
-                    :read-only-message="isSelectedThreadExternallyActive ? 'This thread is running in another Codex client. You can read its live progress here; sending will unlock when that turn finishes.' : ''"
+                    :read-only-message="isSelectedThreadExternallyActive ? 'This thread is open in another Codex client. You can read it here, but close it there before sending a message here.' : ''"
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
                     :dictation-click-to-toggle="dictationClickToToggle"
