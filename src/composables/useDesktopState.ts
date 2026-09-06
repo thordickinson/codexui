@@ -2958,6 +2958,17 @@ export function useDesktopState() {
       return
     }
 
+    if (notification.method === 'thread/deleted') {
+      const deletedThreadId = extractThreadIdFromNotification(notification)
+      if (deletedThreadId) {
+        clearLocalThreadState(deletedThreadId)
+        if (selectedThreadId.value === deletedThreadId) {
+          setSelectedThreadId('')
+        }
+      }
+      return
+    }
+
     if (notification.method === 'thread/name/updated') {
       const params = asRecord(notification.params)
       const threadId = readString(params?.threadId)
@@ -3234,7 +3245,7 @@ export function useDesktopState() {
     if (notification.method === 'thread/goal/updated' || notification.method === 'thread/goal/cleared') return
 
     const threadId = extractThreadIdFromNotification(notification)
-    if (threadId) {
+    if (threadId && notification.method !== 'thread/deleted') {
       pendingThreadMessageRefresh.add(threadId)
     }
 
@@ -3512,6 +3523,12 @@ export function useDesktopState() {
   }
 
   function clearLocalThreadState(threadId: string): void {
+    sourceGroups.value = sourceGroups.value
+      .map((group) => ({
+        projectName: group.projectName,
+        threads: group.threads.filter((thread) => thread.id !== threadId),
+      }))
+      .filter((group) => group.threads.length > 0)
     threadTitleById.value = omitKey(threadTitleById.value, threadId)
     persistedMessagesByThreadId.value = omitKey(persistedMessagesByThreadId.value, threadId)
     livePlanMessagesByThreadId.value = omitKey(livePlanMessagesByThreadId.value, threadId)
@@ -3535,8 +3552,14 @@ export function useDesktopState() {
     threadGoalActionPendingByThreadId.value = omitKey(threadGoalActionPendingByThreadId.value, threadId)
     threadGoalErrorByThreadId.value = omitKey(threadGoalErrorByThreadId.value, threadId)
     queuedMessagesByThreadId.value = omitKey(queuedMessagesByThreadId.value, threadId)
+    failedComposerSubmissionByThreadId.value = omitKey(failedComposerSubmissionByThreadId.value, threadId)
+    resumedThreadById.value = omitKey(resumedThreadById.value, threadId)
+    eventUnreadByThreadId.value = omitKey(eventUnreadByThreadId.value, threadId)
+    inProgressById.value = omitKey(inProgressById.value, threadId)
+    pendingThreadMessageRefresh.delete(threadId)
     saveReadStateMap(readStateByThreadId.value)
     saveThreadScrollStateMap(scrollStateByThreadId.value)
+    applyThreadFlags()
   }
 
   async function archiveThreadById(threadId: string) {
