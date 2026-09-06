@@ -350,6 +350,7 @@
                     :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
                     :disabled="isSelectedThreadExternallyActive"
                     :read-only-message="isSelectedThreadExternallyActive ? 'This thread is open in another Codex client. You can read it here, but close it there before sending a message here.' : ''"
+                    :restore-submission="selectedFailedComposerSubmission"
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
                     :dictation-click-to-toggle="dictationClickToToggle"
@@ -361,6 +362,7 @@
                     @update:selected-collaboration-mode="onSelectCollaborationMode"
                     @goal-command="onThreadGoalCommand"
                     @consume-rate-limit-reset-credit="consumeRateLimitResetCredit"
+                    @restore-submission-consumed="clearSelectedFailedComposerSubmission"
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                     @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
                 </div>
@@ -444,6 +446,7 @@ const {
   selectedThreadGoalError,
   isSelectedThreadGoalPending,
   isSelectedThreadExternallyActive,
+  selectedFailedComposerSubmission,
   selectedThreadId,
   availableCollaborationModes,
   availableModels,
@@ -481,6 +484,7 @@ const {
   setSelectedModelId,
   setSelectedReasoningEffort,
   setSelectedPermissionProfileId,
+  clearSelectedFailedComposerSubmission,
   respondToPendingServerRequest,
   renameProject,
   removeProject,
@@ -1289,21 +1293,25 @@ async function syncAfterMobileResume(): Promise<void> {
   }
 }
 
-function onSubmitThreadMessage(payload: {
+async function onSubmitThreadMessage(payload: {
   text: string
   imageUrls: string[]
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   skills: Array<{ name: string; path: string }>
   mentions: Array<{ name: string; path: string; token?: string }>
   mode: 'steer' | 'queue'
-}): void {
+  restore: () => void
+}): Promise<void> {
   const text = payload.text
   scheduleMobileConversationJumpToLatest()
-  if (isHomeRoute.value) {
-    void submitFirstMessageForNewThread(text, payload.imageUrls, payload.skills, payload.mentions, payload.fileAttachments)
-    return
+  try {
+    const accepted = isHomeRoute.value
+      ? await submitFirstMessageForNewThread(text, payload.imageUrls, payload.skills, payload.mentions, payload.fileAttachments)
+      : await sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mentions, payload.mode, payload.fileAttachments)
+    if (!accepted) payload.restore()
+  } catch {
+    payload.restore()
   }
-  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mentions, payload.mode, payload.fileAttachments)
 }
 
 function onThreadGoalCommand(command: UiThreadGoalCommand): void {
@@ -1934,15 +1942,12 @@ async function submitFirstMessageForNewThread(
   skills: Array<{ name: string; path: string }> = [],
   mentions: Array<{ name: string; path: string; token?: string }> = [],
   fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
-): Promise<void> {
-  try {
-    const threadId = await sendMessageToNewThread(text, newThreadCwd.value, imageUrls, skills, mentions, fileAttachments)
-    if (!threadId) return
-    await router.replace({ name: 'thread', params: { threadId } })
-    scheduleMobileConversationJumpToLatest()
-  } catch {
-    // Error is already reflected in state.
-  }
+): Promise<boolean> {
+  const threadId = await sendMessageToNewThread(text, newThreadCwd.value, imageUrls, skills, mentions, fileAttachments)
+  if (!threadId) return false
+  await router.replace({ name: 'thread', params: { threadId } })
+  scheduleMobileConversationJumpToLatest()
+  return true
 }
 </script>
 

@@ -8,6 +8,11 @@
       {{ props.readOnlyMessage }}
     </p>
 
+    <p v-if="pendingRestoreSubmission" class="thread-composer-restore-notice" role="alert">
+      <span>Your message was not sent.</span>
+      <button type="button" @click="restorePendingSubmission">Restore message</button>
+    </p>
+
     <div class="thread-composer-shell" :class="{ 'thread-composer-shell--no-top-radius': hasQueueAbove }">
       <div
         v-if="workspaceMessageText"
@@ -507,6 +512,7 @@ type SkillItem = {
 }
 type MentionItem = { name: string; description: string; path: string; token?: string }
 type BranchOption = { value: string; label: string }
+export type FileAttachment = { label: string; path: string; fsPath: string }
 
 const props = defineProps<{
   activeThreadId: string
@@ -539,9 +545,13 @@ const props = defineProps<{
   branchPlaceholder?: string
   branchDisabled?: boolean
   branchStatus?: string
+  restoreSubmission?: {
+    id: string
+    text: string
+    imageUrls: string[]
+    fileAttachments: FileAttachment[]
+  } | null
 }>()
-
-export type FileAttachment = { label: string; path: string; fsPath: string }
 
 export type SubmitPayload = {
   text: string
@@ -550,6 +560,7 @@ export type SubmitPayload = {
   skills: Array<{ name: string; path: string }>
   mentions: Array<{ name: string; path: string; token?: string }>
   mode: 'steer' | 'queue'
+  restore: () => void
 }
 
 const emit = defineEmits<{
@@ -561,6 +572,7 @@ const emit = defineEmits<{
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-branch': [branch: string]
   'consume-rate-limit-reset-credit': []
+  'restore-submission-consumed': [id: string]
 }>()
 
 type SelectedImage = {
@@ -578,6 +590,15 @@ type FolderUploadGroup = {
   isUploading: boolean
 }
 
+type RestorableSubmission = {
+  id: string
+  text: string
+  images: SelectedImage[]
+  fileAttachments: FileAttachment[]
+  folderUploadGroups: FolderUploadGroup[]
+  notifyConsumed: boolean
+}
+
 type ParsedGoalCommand = UiThreadGoalCommand | { action: 'edit' }
 type SetGoalCommand = Extract<UiThreadGoalCommand, { action: 'set' }>
 
@@ -590,6 +611,7 @@ const isGoalEditModeSelected = ref(false)
 const isGoalMenuOpen = ref(false)
 const isModelSettingsOpen = ref(false)
 const pendingGoalReplacement = ref<SetGoalCommand | null>(null)
+const pendingRestoreSubmission = ref<RestorableSubmission | null>(null)
 
 const dictationFeedback = ref('')
 const {
@@ -1170,6 +1192,53 @@ function clearComposerSubmissionState(): void {
   closeFileMention()
 }
 
+function applyRestorableSubmission(submission: RestorableSubmission): void {
+  const currentDraft = draft.value.trim()
+  if (!currentDraft) {
+    draft.value = submission.text
+  } else if (submission.text && currentDraft !== submission.text.trim()) {
+    draft.value = `${submission.text}\n\n${draft.value}`
+  }
+
+  const existingImageUrls = new Set(selectedImages.value.map((image) => image.url))
+  selectedImages.value = [
+    ...submission.images.filter((image) => !existingImageUrls.has(image.url)),
+    ...selectedImages.value,
+  ]
+
+  const existingFilePaths = new Set(fileAttachments.value.map((file) => file.fsPath))
+  fileAttachments.value = [
+    ...submission.fileAttachments.filter((file) => !existingFilePaths.has(file.fsPath)),
+    ...fileAttachments.value,
+  ]
+  if (folderUploadGroups.value.length === 0) {
+    folderUploadGroups.value = submission.folderUploadGroups
+  }
+
+  pendingRestoreSubmission.value = null
+  if (submission.notifyConsumed) {
+    emit('restore-submission-consumed', submission.id)
+  }
+  nextTick(() => inputRef.value?.focus())
+}
+
+function queueRestorableSubmission(submission: RestorableSubmission): void {
+  const composerIsEmpty = draft.value.trim().length === 0
+    && selectedImages.value.length === 0
+    && fileAttachments.value.length === 0
+  if (composerIsEmpty) {
+    applyRestorableSubmission(submission)
+    return
+  }
+  pendingRestoreSubmission.value = submission
+}
+
+function restorePendingSubmission(): void {
+  const submission = pendingRestoreSubmission.value
+  if (!submission) return
+  applyRestorableSubmission(submission)
+}
+
 function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
   const text = draft.value.trim()
   if (!canSubmit.value) return
@@ -1227,6 +1296,18 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
     nextTick(() => inputRef.value?.focus())
     return
   }
+  const submittedContextId = props.activeThreadId
+  const restorableSubmission: RestorableSubmission = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    text,
+    images: selectedImages.value.map((image) => ({ ...image })),
+    fileAttachments: fileAttachments.value.map((file) => ({ ...file })),
+    folderUploadGroups: folderUploadGroups.value.map((group) => ({
+      ...group,
+      filePaths: [...group.filePaths],
+    })),
+    notifyConsumed: false,
+  }
   emit('submit', {
     text,
     imageUrls: selectedImages.value.map((image) => image.url),
@@ -1234,6 +1315,10 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
     skills: [],
     mentions: [],
     mode,
+    restore: () => {
+      if (props.activeThreadId !== submittedContextId) return
+      queueRestorableSubmission(restorableSubmission)
+    },
   })
   draft.value = ''
   selectedImages.value = []
@@ -1691,12 +1776,33 @@ onBeforeUnmount(() => {
 })
 
 watch(
+  () => props.restoreSubmission,
+  (submission) => {
+    if (!submission) return
+    queueRestorableSubmission({
+      id: submission.id,
+      text: submission.text,
+      images: submission.imageUrls.map((url, index) => ({
+        id: `${submission.id}-image-${index}`,
+        name: `Image ${index + 1}`,
+        url,
+      })),
+      fileAttachments: submission.fileAttachments.map((file) => ({ ...file })),
+      folderUploadGroups: [],
+      notifyConsumed: true,
+    })
+  },
+  { immediate: true, flush: 'post' },
+)
+
+watch(
   () => props.activeThreadId,
   () => {
     draft.value = ''
     selectedImages.value = []
     fileAttachments.value = []
     folderUploadGroups.value = []
+    pendingRestoreSubmission.value = null
     dictationFeedback.value = ''
     resetGoalComposerMode()
     isGoalMenuOpen.value = false
@@ -2254,6 +2360,14 @@ watch(
 
 .thread-composer-read-only-notice {
   @apply mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900;
+}
+
+.thread-composer-restore-notice {
+  @apply mb-2 flex items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-900;
+}
+
+.thread-composer-restore-notice button {
+  @apply shrink-0 rounded-md border border-rose-300 bg-white px-2 py-0.5 font-medium text-rose-800 hover:bg-rose-100;
 }
 
 .thread-composer-submit {

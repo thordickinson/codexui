@@ -927,6 +927,12 @@ export function useDesktopState() {
     collaborationMode: CollaborationModeKind
     fallbackRetried: boolean
   }
+  type FailedComposerSubmission = {
+    id: string
+    text: string
+    imageUrls: string[]
+    fileAttachments: FileAttachment[]
+  }
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModels = ref<UiCodexModel[]>([])
@@ -967,6 +973,7 @@ export function useDesktopState() {
   const activeTurnIdByThreadId = ref<Record<string, string>>({})
   const pendingServerRequestsByThreadId = ref<Record<string, UiServerRequest[]>>({})
   const pendingTurnRequestByThreadId = ref<Record<string, PendingTurnRequest>>({})
+  const failedComposerSubmissionByThreadId = ref<Record<string, FailedComposerSubmission>>({})
   const codexRateLimit = ref<UiRateLimitSnapshot | null>(null)
   const codexWorkspaceMessages = ref<UiWorkspaceMessage[]>([])
   const isConsumingRateLimitResetCredit = ref(false)
@@ -1057,6 +1064,11 @@ export function useDesktopState() {
     const threadId = selectedThreadId.value
     if (!threadId || activeWriterThreadById.value[threadId] !== true) return false
     return resumedThreadById.value[threadId] !== true
+  })
+  const selectedFailedComposerSubmission = computed<FailedComposerSubmission | null>(() => {
+    const threadId = selectedThreadId.value
+    if (!threadId) return null
+    return failedComposerSubmissionByThreadId.value[threadId] ?? null
   })
   const messages = computed<UiMessage[]>(() => {
     const threadId = selectedThreadId.value
@@ -1367,11 +1379,37 @@ export function useDesktopState() {
       ...pendingTurnRequestByThreadId.value,
       [threadId]: request,
     }
+    if (failedComposerSubmissionByThreadId.value[threadId]) {
+      failedComposerSubmissionByThreadId.value = omitKey(failedComposerSubmissionByThreadId.value, threadId)
+    }
   }
 
   function clearPendingTurnRequest(threadId: string): void {
     if (!pendingTurnRequestByThreadId.value[threadId]) return
     pendingTurnRequestByThreadId.value = omitKey(pendingTurnRequestByThreadId.value, threadId)
+  }
+
+  function markPendingTurnRequestFailed(threadId: string): void {
+    const pending = pendingTurnRequestByThreadId.value[threadId]
+    if (!pending) return
+    failedComposerSubmissionByThreadId.value = {
+      ...failedComposerSubmissionByThreadId.value,
+      [threadId]: {
+        id: `${pending.clientUserMessageId}:${Date.now()}`,
+        text: pending.text,
+        imageUrls: [...pending.imageUrls],
+        fileAttachments: pending.fileAttachments.map((file) => ({ ...file })),
+      },
+    }
+  }
+
+  function clearFailedComposerSubmission(threadId: string, submissionId: string): void {
+    if (!threadId || failedComposerSubmissionByThreadId.value[threadId]?.id !== submissionId) return
+    failedComposerSubmissionByThreadId.value = omitKey(failedComposerSubmissionByThreadId.value, threadId)
+  }
+
+  function clearSelectedFailedComposerSubmission(submissionId: string): void {
+    clearFailedComposerSubmission(selectedThreadId.value, submissionId)
   }
 
   async function retryPendingTurnWithFallback(threadId: string): Promise<void> {
@@ -1445,6 +1483,7 @@ export function useDesktopState() {
       error.value = errorMessage
       setThreadInProgress(threadId, false)
       setTurnActivityForThread(threadId, null)
+      markPendingTurnRequestFailed(threadId)
     } finally {
       fallbackRetryInFlightThreadIds.delete(threadId)
     }
@@ -1663,6 +1702,10 @@ export function useDesktopState() {
     turnActivityByThreadId.value = pruneThreadStateMap(turnActivityByThreadId.value, activeThreadIds)
     turnErrorByThreadId.value = pruneThreadStateMap(turnErrorByThreadId.value, activeThreadIds)
     activeTurnIdByThreadId.value = pruneThreadStateMap(activeTurnIdByThreadId.value, activeThreadIds)
+    failedComposerSubmissionByThreadId.value = pruneThreadStateMap(
+      failedComposerSubmissionByThreadId.value,
+      activeThreadIds,
+    )
     threadTokenUsageByThreadId.value = pruneThreadStateMap(threadTokenUsageByThreadId.value, activeThreadIds)
     threadGoalByThreadId.value = pruneThreadStateMap(threadGoalByThreadId.value, activeThreadIds)
     threadGoalActionPendingByThreadId.value = pruneThreadStateMap(threadGoalActionPendingByThreadId.value, activeThreadIds)
@@ -3015,7 +3058,7 @@ export function useDesktopState() {
       setThreadInProgress(completedTurn.threadId, false)
       setTurnActivityForThread(completedTurn.threadId, null)
       markThreadUnreadByEvent(completedTurn.threadId)
-      if (!shouldRetryWithFallback) {
+      if (!shouldRetryWithFallback && !turnErrorMessage) {
         clearPendingTurnRequest(completedTurn.threadId)
         void processQueuedMessages(completedTurn.threadId)
       }
@@ -3029,6 +3072,8 @@ export function useDesktopState() {
       error.value = turnErrorMessage
       if (failedThreadId && shouldRetryWithFallback) {
         void retryPendingTurnWithFallback(failedThreadId)
+      } else if (failedThreadId) {
+        markPendingTurnRequestFailed(failedThreadId)
       }
     } else if (completedTurn) {
       setTurnErrorForThread(completedTurn.threadId, null)
@@ -3170,7 +3215,7 @@ export function useDesktopState() {
         setThreadInProgress(completedThreadId, false)
         setTurnActivityForThread(completedThreadId, null)
         markThreadUnreadByEvent(completedThreadId)
-        if (!shouldRetryWithFallback) {
+        if (!shouldRetryWithFallback && !turnErrorMessage) {
           clearPendingTurnRequest(completedThreadId)
           void processQueuedMessages(completedThreadId)
         }
@@ -3643,13 +3688,13 @@ export function useDesktopState() {
     mentions: MentionParam[] = [],
     mode: 'steer' | 'queue' = 'steer',
     fileAttachments: FileAttachment[] = [],
-  ): Promise<void> {
+  ): Promise<boolean> {
     const threadId = selectedThreadId.value
     const nextText = text.trim()
-    if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
+    if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return false
 
     if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, mentions, fileAttachments)) {
-      return
+      return true
     }
 
     const isInProgress = inProgressById.value[threadId] === true
@@ -3659,7 +3704,7 @@ export function useDesktopState() {
       const errorMessage = 'This thread is open in another Codex client. Close it there before sending a message here.'
       setTurnErrorForThread(threadId, errorMessage)
       error.value = errorMessage
-      return
+      return false
     }
 
     if (isInProgress && mode === 'queue') {
@@ -3681,17 +3726,20 @@ export function useDesktopState() {
           },
         ],
       }
-      return
+      return true
     }
 
     if (isInProgress) {
       shouldAutoScrollOnNextAgentEvent = true
-      void steerActiveTurnForThread(threadId, nextText, imageUrls, skills, mentions, fileAttachments, clientUserMessageId).catch((unknownError) => {
+      try {
+        await steerActiveTurnForThread(threadId, nextText, imageUrls, skills, mentions, fileAttachments, clientUserMessageId)
+        return true
+      } catch (unknownError) {
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         setTurnErrorForThread(threadId, errorMessage)
         error.value = errorMessage
-      })
-      return
+        return false
+      }
     }
 
     error.value = ''
@@ -3713,6 +3761,7 @@ export function useDesktopState() {
 
     try {
       await startTurnForThread(threadId, nextText, imageUrls, skills, mentions, fileAttachments, clientUserMessageId)
+      return true
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
       setThreadInProgress(threadId, false)
@@ -3720,7 +3769,7 @@ export function useDesktopState() {
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       setTurnErrorForThread(threadId, errorMessage)
       error.value = errorMessage
-      throw unknownError
+      return false
     }
   }
 
@@ -4081,6 +4130,13 @@ export function useDesktopState() {
       setSelectedCollaborationMode(next.collaborationMode)
       await startTurnForThread(threadId, next.text, next.imageUrls, next.skills, next.mentions, next.fileAttachments, next.clientUserMessageId)
     } catch {
+      const currentQueue = queuedMessagesByThreadId.value[threadId] ?? []
+      if (!currentQueue.some((message) => message.id === next.id)) {
+        queuedMessagesByThreadId.value = {
+          ...queuedMessagesByThreadId.value,
+          [threadId]: [next, ...currentQueue],
+        }
+      }
       setThreadInProgress(threadId, false)
       setTurnActivityForThread(threadId, null)
     } finally {
@@ -4457,6 +4513,7 @@ export function useDesktopState() {
     turnSummaryByThreadId.value = {}
     turnErrorByThreadId.value = {}
     activeTurnIdByThreadId.value = {}
+    failedComposerSubmissionByThreadId.value = {}
     queuedMessagesByThreadId.value = {}
     codexRateLimit.value = null
     codexWorkspaceMessages.value = []
@@ -4484,16 +4541,23 @@ export function useDesktopState() {
       : omitKey(queuedMessagesByThreadId.value, threadId)
   }
 
-  function steerQueuedMessage(messageId: string): void {
+  async function steerQueuedMessage(messageId: string): Promise<void> {
     const threadId = selectedThreadId.value
     if (!threadId) return
     const queue = queuedMessagesByThreadId.value[threadId]
     if (!queue) return
     const msg = queue.find((m) => m.id === messageId)
     if (!msg) return
-    removeQueuedMessage(messageId)
     setSelectedCollaborationMode(msg.collaborationMode)
-    void sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, msg.mentions, 'steer', msg.fileAttachments)
+    const accepted = await sendMessageToSelectedThread(
+      msg.text,
+      msg.imageUrls,
+      msg.skills,
+      msg.mentions,
+      'steer',
+      msg.fileAttachments,
+    )
+    if (accepted) removeQueuedMessage(messageId)
   }
 
   function primeSelectedThread(threadId: string): void {
@@ -4515,6 +4579,7 @@ export function useDesktopState() {
     selectedThreadGoalError,
     isSelectedThreadGoalPending,
     isSelectedThreadExternallyActive,
+    selectedFailedComposerSubmission,
     selectedThreadId,
     availableCollaborationModes,
     availableModels,
@@ -4555,6 +4620,7 @@ export function useDesktopState() {
     setSelectedModelId,
     setSelectedReasoningEffort,
     setSelectedPermissionProfileId,
+    clearSelectedFailedComposerSubmission,
     respondToPendingServerRequest,
     renameProject,
     removeProject,
