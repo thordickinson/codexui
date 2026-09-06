@@ -1,8 +1,65 @@
 <template>
   <section class="thread-tree-root">
+    <section v-if="pinnedThreads.length > 0" class="pinned-section">
+      <SidebarMenuRow as="header" class="pinned-projects-header-row">
+        <span class="pinned-projects-header">Pinned Threads</span>
+      </SidebarMenuRow>
+      <ul class="thread-list">
+        <li
+          v-for="thread in pinnedThreads"
+          :key="thread.id"
+          class="thread-row-item"
+          :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
+        >
+          <SidebarMenuRow
+            class="thread-row"
+            :data-active="thread.id === selectedThreadId"
+            :data-pinned="isPinned(thread.id)"
+            :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
+            :force-right-hover="isThreadMenuOpen(thread.id)"
+          >
+            <template #left>
+              <span class="thread-left-stack">
+                <span
+                  v-if="thread.inProgress || thread.unread"
+                  class="thread-status-indicator"
+                  :data-state="getThreadState(thread)"
+                  :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
+                />
+                <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)">
+                  <IconTablerPin class="thread-icon" />
+                </button>
+              </span>
+            </template>
+            <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
+              <span class="thread-row-title-wrap">
+                <span class="thread-row-title">{{ thread.title }}</span>
+                <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" />
+              </span>
+            </button>
+            <template #right>
+              <span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span>
+            </template>
+            <template #right-hover>
+              <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap">
+                <button
+                  class="thread-menu-trigger"
+                  type="button"
+                  title="thread_menu"
+                  @click.stop="toggleThreadMenu(thread.id)"
+                >
+                  <IconTablerDots class="thread-icon" />
+                </button>
+              </div>
+            </template>
+          </SidebarMenuRow>
+        </li>
+      </ul>
+    </section>
+
     <section v-if="pinnedProjectGroups.length > 0" class="pinned-projects-section">
       <SidebarMenuRow as="header" class="pinned-projects-header-row">
-        <span class="pinned-projects-header">Pinned projects</span>
+        <span class="pinned-projects-header">Pinned Projects</span>
       </SidebarMenuRow>
       <article v-for="group in pinnedProjectGroups" :key="group.projectName" class="project-group project-group-pinned">
         <SidebarMenuRow
@@ -58,60 +115,6 @@
         <SidebarMenuRow v-else as="p" class="project-empty-row"><template #left><span class="project-empty-spacer" /></template><span class="project-empty">No threads</span></SidebarMenuRow>
         <SidebarMenuRow v-if="hasHiddenThreads(group)" class="thread-show-more-row"><template #left><span class="thread-show-more-spacer" /></template><button class="thread-show-more-button" type="button" @click="toggleProjectExpansion(group.projectName)">{{ isExpanded(group.projectName) ? 'Show less' : 'Show more' }}</button></SidebarMenuRow>
       </article>
-    </section>
-
-    <section v-if="pinnedThreads.length > 0" class="pinned-section">
-      <ul class="thread-list">
-        <li
-          v-for="thread in pinnedThreads"
-          :key="thread.id"
-          class="thread-row-item"
-          :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
-        >
-          <SidebarMenuRow
-            class="thread-row"
-            :data-active="thread.id === selectedThreadId"
-            :data-pinned="isPinned(thread.id)"
-            :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
-            :force-right-hover="isThreadMenuOpen(thread.id)"
-          >
-            <template #left>
-              <span class="thread-left-stack">
-                <span
-                  v-if="thread.inProgress || thread.unread"
-                  class="thread-status-indicator"
-                  :data-state="getThreadState(thread)"
-                  :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
-                />
-                <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)">
-                  <IconTablerPin class="thread-icon" />
-                </button>
-              </span>
-            </template>
-            <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
-              <span class="thread-row-title-wrap">
-                <span class="thread-row-title">{{ thread.title }}</span>
-                <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" />
-              </span>
-            </button>
-            <template #right>
-              <span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span>
-            </template>
-            <template #right-hover>
-              <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap">
-                <button
-                  class="thread-menu-trigger"
-                  type="button"
-                  title="thread_menu"
-                  @click.stop="toggleThreadMenu(thread.id)"
-                >
-                  <IconTablerDots class="thread-icon" />
-                </button>
-              </div>
-            </template>
-          </SidebarMenuRow>
-        </li>
-      </ul>
     </section>
 
     <SidebarMenuRow
