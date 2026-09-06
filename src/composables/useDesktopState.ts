@@ -1063,7 +1063,12 @@ export function useDesktopState() {
   const isSelectedThreadExternallyActive = computed(() => {
     const threadId = selectedThreadId.value
     if (!threadId || activeWriterThreadById.value[threadId] !== true) return false
-    return resumedThreadById.value[threadId] !== true
+    return resumedThreadById.value[threadId] !== true && inProgressById.value[threadId] === true
+  })
+  const isSelectedThreadExternallyIdle = computed(() => {
+    const threadId = selectedThreadId.value
+    if (!threadId || activeWriterThreadById.value[threadId] !== true) return false
+    return resumedThreadById.value[threadId] !== true && inProgressById.value[threadId] !== true
   })
   const selectedFailedComposerSubmission = computed<FailedComposerSubmission | null>(() => {
     const threadId = selectedThreadId.value
@@ -3575,6 +3580,39 @@ export function useDesktopState() {
     }
   }
 
+  async function createContinuationFork(sourceThreadId: string): Promise<string> {
+    const sourceThread = flattenThreads(sourceGroups.value).find((row) => row.id === sourceThreadId) ?? null
+    const forked = await forkThreadRpc(sourceThreadId)
+    const forkedThreadId = forked.threadId.trim()
+    if (!forkedThreadId) return ''
+
+    const forkedCwd = forked.cwd.trim() || sourceThread?.cwd?.trim() || ''
+    const forkedThreadTitle = toForkedThreadTitle(sourceThread?.title || sourceThread?.preview || 'Untitled thread')
+    insertOptimisticThread(forkedThreadId, forkedCwd, forkedThreadTitle)
+    setPersistedMessagesForThread(forkedThreadId, forked.messages)
+    loadedMessagesByThreadId.value = {
+      ...loadedMessagesByThreadId.value,
+      [forkedThreadId]: true,
+    }
+    resumedThreadById.value = {
+      ...resumedThreadById.value,
+      [forkedThreadId]: true,
+    }
+    clearLivePlansForThread(forkedThreadId)
+    setLiveAgentMessagesForThread(forkedThreadId, [])
+    clearLiveReasoningForThread(forkedThreadId)
+    if (liveCommandsByThreadId.value[forkedThreadId]) {
+      liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, forkedThreadId)
+    }
+    setTurnSummaryForThread(forkedThreadId, null)
+    setTurnActivityForThread(forkedThreadId, null)
+    setTurnErrorForThread(forkedThreadId, null)
+    setThreadInProgress(forkedThreadId, false)
+
+    await renameThreadById(forkedThreadId, forkedThreadTitle)
+    return forkedThreadId
+  }
+
   async function forkThreadFromTurn(threadId: string, turnIndex: number): Promise<string> {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId || !Number.isInteger(turnIndex) || turnIndex < 0) return ''
@@ -3603,36 +3641,10 @@ export function useDesktopState() {
 
     if (lastTurnIndex >= 0 && turnIndex > lastTurnIndex) return ''
 
-    const sourceThread = flattenThreads(sourceGroups.value).find((row) => row.id === normalizedThreadId) ?? null
-
     try {
       error.value = ''
-      const forked = await forkThreadRpc(normalizedThreadId)
-      const forkedThreadId = forked.threadId.trim()
+      const forkedThreadId = await createContinuationFork(normalizedThreadId)
       if (!forkedThreadId) return ''
-
-      const forkedCwd = forked.cwd.trim() || sourceThread?.cwd?.trim() || ''
-      const forkedThreadTitle = toForkedThreadTitle(sourceThread?.title || sourceThread?.preview || 'Untitled thread')
-      insertOptimisticThread(forkedThreadId, forkedCwd, forkedThreadTitle)
-      setPersistedMessagesForThread(forkedThreadId, forked.messages)
-      loadedMessagesByThreadId.value = {
-        ...loadedMessagesByThreadId.value,
-        [forkedThreadId]: true,
-      }
-      resumedThreadById.value = {
-        ...resumedThreadById.value,
-        [forkedThreadId]: true,
-      }
-      clearLivePlansForThread(forkedThreadId)
-      setLiveAgentMessagesForThread(forkedThreadId, [])
-      clearLiveReasoningForThread(forkedThreadId)
-      if (liveCommandsByThreadId.value[forkedThreadId]) {
-        liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, forkedThreadId)
-      }
-      setTurnSummaryForThread(forkedThreadId, null)
-      setTurnActivityForThread(forkedThreadId, null)
-      setTurnErrorForThread(forkedThreadId, null)
-      setThreadInProgress(forkedThreadId, false)
 
       const turnsToRollback = lastTurnIndex - turnIndex
       if (turnsToRollback > 0) {
@@ -3640,7 +3652,6 @@ export function useDesktopState() {
         setPersistedMessagesForThread(forkedThreadId, rolledBackMessages)
       }
 
-      await renameThreadById(forkedThreadId, forkedThreadTitle)
       setSelectedThreadId(forkedThreadId)
       void loadThreads().catch(() => {})
       return forkedThreadId
@@ -3689,23 +3700,43 @@ export function useDesktopState() {
     mode: 'steer' | 'queue' = 'steer',
     fileAttachments: FileAttachment[] = [],
   ): Promise<boolean> {
-    const threadId = selectedThreadId.value
+    let threadId = selectedThreadId.value
     const nextText = text.trim()
     if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return false
+
+    let isInProgress = inProgressById.value[threadId] === true
+    const isExternallyOwned = activeWriterThreadById.value[threadId] === true
+      && resumedThreadById.value[threadId] !== true
+
+    if (isExternallyOwned && isInProgress) {
+      const errorMessage = 'This thread is running in another Codex client. Wait for that turn to finish before continuing.'
+      setTurnErrorForThread(threadId, errorMessage)
+      error.value = errorMessage
+      return false
+    }
+
+    if (isExternallyOwned) {
+      try {
+        error.value = ''
+        const forkedThreadId = await createContinuationFork(threadId)
+        if (!forkedThreadId) return false
+        threadId = forkedThreadId
+        isInProgress = false
+        setSelectedThreadId(forkedThreadId)
+        void loadThreads().catch(() => {})
+      } catch (unknownError) {
+        const errorMessage = unknownError instanceof Error ? unknownError.message : 'Failed to continue this thread in a fork.'
+        setTurnErrorForThread(threadId, errorMessage)
+        error.value = errorMessage
+        return false
+      }
+    }
 
     if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, mentions, fileAttachments)) {
       return true
     }
 
-    const isInProgress = inProgressById.value[threadId] === true
     const clientUserMessageId = createClientUserMessageId()
-
-    if (activeWriterThreadById.value[threadId] === true && resumedThreadById.value[threadId] !== true) {
-      const errorMessage = 'This thread is open in another Codex client. Close it there before sending a message here.'
-      setTurnErrorForThread(threadId, errorMessage)
-      error.value = errorMessage
-      return false
-    }
 
     if (isInProgress && mode === 'queue') {
       const queue = queuedMessagesByThreadId.value[threadId] ?? []
@@ -4579,6 +4610,7 @@ export function useDesktopState() {
     selectedThreadGoalError,
     isSelectedThreadGoalPending,
     isSelectedThreadExternallyActive,
+    isSelectedThreadExternallyIdle,
     selectedFailedComposerSubmission,
     selectedThreadId,
     availableCollaborationModes,

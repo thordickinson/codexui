@@ -349,7 +349,8 @@
                     :is-consuming-rate-limit-reset-credit="isConsumingRateLimitResetCredit"
                     :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
                     :disabled="isSelectedThreadExternallyActive"
-                    :read-only-message="isSelectedThreadExternallyActive ? 'This thread is open in another Codex client. You can read it here, but close it there before sending a message here.' : ''"
+                    :read-only-message="isSelectedThreadExternallyActive ? 'This thread is running in another Codex client. You can read its progress here and continue when that turn finishes.' : ''"
+                    :status-message="isSelectedThreadExternallyIdle ? 'This idle thread remains open in another Codex client. Sending here will continue from its history in a new fork.' : ''"
                     :restore-submission="selectedFailedComposerSubmission"
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
@@ -446,6 +447,7 @@ const {
   selectedThreadGoalError,
   isSelectedThreadGoalPending,
   isSelectedThreadExternallyActive,
+  isSelectedThreadExternallyIdle,
   selectedFailedComposerSubmission,
   selectedThreadId,
   availableCollaborationModes,
