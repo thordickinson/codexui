@@ -1089,6 +1089,7 @@ class AppServerProcess {
   private readBuffer = ''
   private nextId = 1
   private stopping = false
+  private readonly ownedThreadIds = new Set<string>()
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
   private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
@@ -1141,6 +1142,7 @@ class AppServerProcess {
 
       this.pending.clear()
       this.pendingServerRequests.clear()
+      this.ownedThreadIds.clear()
       this.process = null
       this.initialized = false
       this.initializePromise = null
@@ -1323,7 +1325,28 @@ class AppServerProcess {
 
   async rpc(method: string, params: unknown): Promise<unknown> {
     await this.ensureInitialized()
-    return this.call(method, params)
+    const result = await this.call(method, params)
+
+    if (method === 'thread/start' || method === 'thread/resume' || method === 'thread/fork') {
+      const resultRecord = asRecord(result)
+      const threadRecord = asRecord(resultRecord?.thread)
+      const threadId = readNonEmptyString(threadRecord?.id)
+      if (threadId) {
+        this.ownedThreadIds.add(threadId)
+      }
+    } else if (method === 'thread/unsubscribe' || method === 'thread/delete') {
+      const paramsRecord = asRecord(params)
+      const threadId = readNonEmptyString(paramsRecord?.threadId)
+      if (threadId) {
+        this.ownedThreadIds.delete(threadId)
+      }
+    }
+
+    return result
+  }
+
+  listOwnedThreadIds(): string[] {
+    return Array.from(this.ownedThreadIds)
   }
 
   onNotification(listener: (value: { method: string; params: unknown }) => void): () => void {
@@ -1385,6 +1408,7 @@ class AppServerProcess {
     }
     this.pending.clear()
     this.pendingServerRequests.clear()
+    this.ownedThreadIds.clear()
 
     try {
       proc.stdin.end()
@@ -1603,16 +1627,18 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'GET' && url.pathname === '/codex-api/thread-activity') {
         const activeThreadIds = await readActiveWriterThreadIds()
-        let bridgeThreadIds = new Set<string>()
+        const bridgeThreadIds = new Set(appServer.listOwnedThreadIds())
         try {
           const loadedThreadsResult = asRecord(await appServer.rpc('thread/loaded/list', {}))
           const loadedThreadIds = Array.isArray(loadedThreadsResult?.data)
             ? loadedThreadsResult.data.filter((threadId): threadId is string => typeof threadId === 'string')
             : []
-          bridgeThreadIds = new Set(loadedThreadIds)
+          for (const threadId of loadedThreadIds) {
+            bridgeThreadIds.add(threadId)
+          }
         } catch {
           // Older app-server versions do not expose thread/loaded/list. In that case,
-          // conservatively treat every held writer lock as external.
+          // Fall back to the threads this bridge observed itself acquiring.
         }
         setJson(res, 200, {
           activeThreadIds: activeThreadIds.filter((threadId) => !bridgeThreadIds.has(threadId)),
