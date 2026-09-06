@@ -16,17 +16,14 @@ are sent. Preserve the ability to restart the service cleanly after updates.
 ## Build And Restart Runbook
 
 - Build the project with `npm run build`.
-- Port `4172` is retired and must not be used for debugging, testing, or deployment.
-- The only runtime environment is the `4173` instance.
+- Ports `4172` and `4173` are retired and must not be used for debugging, testing, or deployment.
+- The only runtime environment is the `9300` instance managed by the user-level `codexui.service` systemd unit.
 - After each change, do not run manual browser testing or Playwright verification unless the user explicitly asks for it.
-- The `4173` instance must run in an isolated `tmux` session in the background.
-- The `4173` instance must start without password protection; always include `--no-password` in the launch command.
+- Preserve the service's existing password and project settings from its systemd unit and environment file.
 - Recommended update flow:
   1. `npm run build`
-  2. `tmux has-session -t codexui-prod 2>/dev/null && tmux kill-session -t codexui-prod`
-  3. `tmux set-environment -g SHELL /bin/bash && tmux set-option -g default-shell /bin/bash`
-  4. `tmux new-session -d -s codexui-prod -c /projects/srv/codexui 'SHELL=/bin/bash exec /bin/bash -l'`
-  5. `tmux send-keys -t codexui-prod:0.0 'node dist-cli/index.js --port 4173 --no-tunnel --no-password' C-m`
+  2. `systemctl --user restart codexui.service`
+  3. `systemctl --user is-active codexui.service`
 
 ## "Push to main or commit to main" Means Merge To Local Main
 
@@ -63,9 +60,9 @@ are sent. Preserve the ability to restart the service cleanly after updates.
 - Do not run routine testing after each change.
 - Default completion for any change is:
   1. `npm run build`
-  2. restart the `tmux` session on port `4173`
+  2. restart the user-level `codexui.service` on port `9300`
 - Manual browser checks, Playwright verification, screenshots, and CJS smoke tests are only required when the user explicitly asks for them.
-- If explicitly requested, run browser automation against `http://127.0.0.1:4173`.
+- If explicitly requested, run browser automation against `http://127.0.0.1:9300`.
 
 ## Browser Automation: Prefer Playwright CLI Over Cursor Browser Tool
 
@@ -93,8 +90,8 @@ are sent. Preserve the ability to restart the service cleanly after updates.
 - Use this flow only when the user explicitly asks to validate UI behavior on Oracle A1 from the local Mac machine.
 - On A1, start the app server with Codex CLI available in `PATH`:
   - `export PATH="$HOME/.npm-global/bin:$PATH"`
-  - `node dist-cli/index.js --port 4173 --no-tunnel --no-password`
-- From Mac, run Playwright against Tailscale URL (`http://100.127.77.25:4173`), not localhost.
+  - `node dist-cli/index.js --port 9300 --no-tunnel --no-password`
+- From Mac, run Playwright against Tailscale URL (`http://100.127.77.25:9300`), not localhost.
 - Verify success with both checks:
   - UI assertion in Playwright (new project/folder appears in sidebar or selector).
   - Filesystem assertion on A1 (`test -d /home/ubuntu/<project-name>`).
