@@ -83,9 +83,106 @@
           <span class="project-main-button"><span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span></span>
           <template #right>
             <div class="project-hover-controls">
-              <button class="project-pin-button" type="button" :title="getProjectPinLabel(group.projectName)" :aria-label="getProjectPinLabel(group.projectName)" @click.stop="toggleProjectPin(group.projectName)">
-                <IconTablerPin class="thread-icon" />
-              </button>
+              <div :ref="(el) => setProjectMenuWrapRef(group.projectName, el)" class="project-menu-wrap">
+                <button
+                  class="project-menu-trigger"
+                  type="button"
+                  title="project_menu"
+                  @click.stop="toggleProjectMenu(group.projectName)"
+                >
+                  <IconTablerDots class="thread-icon" />
+                </button>
+
+                <div
+                  v-if="isProjectMenuOpen(group.projectName)"
+                  class="project-menu-panel"
+                  :data-open-direction="projectMenuDirectionById[group.projectName] ?? 'down'"
+                  @click.stop
+                >
+                  <template v-if="projectMenuMode === 'actions'">
+                    <button class="project-menu-item" type="button" @click="toggleProjectPinFromMenu(group.projectName)">
+                      {{ getProjectPinLabel(group.projectName) }}
+                    </button>
+                    <button class="project-menu-item" type="button" @click="onBrowseProjectFiles(group.projectName)">
+                      Browse files
+                    </button>
+                    <button class="project-menu-item" type="button" @click="openGitProjectMenu(group.projectName)">
+                      Git branches
+                    </button>
+                    <button class="project-menu-item" type="button" @click="openRenameProjectMenu(group.projectName)">
+                      Edit name
+                    </button>
+                    <button
+                      class="project-menu-item project-menu-item-danger"
+                      type="button"
+                      @click="onRemoveProject(group.projectName)"
+                    >
+                      Remove
+                    </button>
+                  </template>
+                  <template v-else-if="projectMenuMode === 'rename'">
+                    <label class="project-menu-label">Project name</label>
+                    <input
+                      v-model="projectRenameDraft"
+                      class="project-menu-input"
+                      type="text"
+                      @input="onProjectNameInput(group.projectName)"
+                    />
+                  </template>
+                  <template v-else>
+                    <div class="project-git-menu">
+                      <div class="project-git-header">
+                        <span class="project-git-title">Git</span>
+                        <button class="project-git-refresh" type="button" @click="emit('open-project-git-menu', group.projectName)">
+                          Reload
+                        </button>
+                      </div>
+                      <p v-if="props.projectGitLoadingById[group.projectName]" class="project-git-message">
+                        Loading branches...
+                      </p>
+                      <p v-else-if="props.projectGitErrorById[group.projectName]" class="project-git-message is-error">
+                        {{ props.projectGitErrorById[group.projectName] }}
+                      </p>
+                      <p v-else-if="!getProjectGitState(group.projectName)?.isGitRepo" class="project-git-message">
+                        Not a Git repository
+                      </p>
+                      <template v-else>
+                        <label class="project-menu-label">Branch</label>
+                        <select v-model="projectBranchDraft" class="project-branch-select">
+                          <option
+                            v-for="branch in getProjectGitState(group.projectName)?.branches ?? []"
+                            :key="branch.name"
+                            :value="branch.name"
+                          >
+                            {{ formatBranchOption(branch.name, branch.isCurrent, branch.worktreePath) }}
+                          </option>
+                        </select>
+                        <div class="project-git-actions">
+                          <button
+                            class="project-git-button"
+                            type="button"
+                            :disabled="!canSwitchProjectBranch(group.projectName)"
+                            @click="emit('switch-project-branch', { projectName: group.projectName, branch: projectBranchDraft })"
+                          >
+                            Switch
+                          </button>
+                          <button
+                            class="project-git-button project-git-button-primary"
+                            type="button"
+                            :disabled="!projectBranchDraft"
+                            @click="emit('create-project-worktree', { projectName: group.projectName, branch: projectBranchDraft })"
+                          >
+                            Worktree
+                          </button>
+                        </div>
+                        <p v-if="props.projectGitActionById[group.projectName]" class="project-git-message">
+                          {{ props.projectGitActionById[group.projectName] }}
+                        </p>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
               <button class="thread-start-button" type="button" :aria-label="getNewThreadButtonAriaLabel(group.projectName)" :title="getNewThreadButtonAriaLabel(group.projectName)" @click.stop="onStartNewThread(group.projectName)">
                 <IconTablerFilePencil class="thread-icon" />
               </button>
@@ -262,15 +359,6 @@
             </span>
             <template #right>
               <div class="project-hover-controls">
-                <button
-                  class="project-pin-button"
-                  type="button"
-                  :title="getProjectPinLabel(group.projectName)"
-                  :aria-label="getProjectPinLabel(group.projectName)"
-                  @click.stop="toggleProjectPin(group.projectName)"
-                >
-                  <IconTablerPin class="thread-icon" />
-                </button>
                 <div :ref="(el) => setProjectMenuWrapRef(group.projectName, el)" class="project-menu-wrap">
                   <button
                     class="project-menu-trigger"
@@ -288,6 +376,9 @@
                     @click.stop
                   >
                     <template v-if="projectMenuMode === 'actions'">
+                      <button class="project-menu-item" type="button" @click="toggleProjectPinFromMenu(group.projectName)">
+                        {{ getProjectPinLabel(group.projectName) }}
+                      </button>
                       <button class="project-menu-item" type="button" @click="onBrowseProjectFiles(group.projectName)">
                         Browse files
                       </button>
@@ -528,7 +619,6 @@ import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
 import IconTablerFolderOpen from '../icons/IconTablerFolderOpen.vue'
 import IconTablerGitFork from '../icons/IconTablerGitFork.vue'
-import IconTablerPin from '../icons/IconTablerPin.vue'
 import SidebarMenuRow from './SidebarMenuRow.vue'
 import {
   PINNED_PROJECT_IDS_STORAGE_KEY,
@@ -997,6 +1087,11 @@ function toggleProjectPin(projectName: string): void {
   pinnedProjectIds.value = [projectName, ...pinnedProjectIds.value]
 }
 
+function toggleProjectPinFromMenu(projectName: string): void {
+  toggleProjectPin(projectName)
+  closeProjectMenu()
+}
+
 function onSelect(threadId: string): void {
   emit('select', threadId)
 }
@@ -1342,9 +1437,11 @@ function updateProjectMenuDirection(projectName: string): void {
   const menuWrapElement = projectMenuWrapElementByName.get(projectName)
   if (!menuWrapElement) return
 
+  const panelHeight = projectMenuMode.value === 'git' ? 236 : projectMenuMode.value === 'actions' ? 152 : 112
+
   projectMenuDirectionById.value = {
     ...projectMenuDirectionById.value,
-    [projectName]: resolveMenuDirection(menuWrapElement, projectMenuMode.value === 'git' ? 236 : 112),
+    [projectName]: resolveMenuDirection(menuWrapElement, panelHeight),
   }
 }
 
@@ -1987,16 +2084,6 @@ onBeforeUnmount(() => {
 
 .project-hover-controls {
   @apply flex items-center gap-1;
-}
-
-.project-pin-button {
-  @apply h-4 w-4 rounded p-0 text-zinc-500 opacity-0 transition flex items-center justify-center hover:bg-zinc-200 hover:text-zinc-700;
-}
-
-.project-group-pinned .project-pin-button,
-.project-header-row:hover .project-pin-button,
-.project-header-row:focus-within .project-pin-button {
-  @apply opacity-100;
 }
 
 .project-menu-trigger {
