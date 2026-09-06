@@ -372,6 +372,10 @@
   @apply text-zinc-400;
 }
 
+:root.dark .rename-thread-error {
+  @apply bg-rose-950/40 text-rose-200;
+}
+
 :root.dark .rename-thread-input {
   @apply border-zinc-600 bg-zinc-700 text-zinc-100;
 }

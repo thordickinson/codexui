@@ -3575,7 +3575,7 @@ export function useDesktopState() {
     }
   }
 
-  async function deleteThreadById(threadId: string) {
+  async function deleteThreadById(threadId: string): Promise<string> {
     try {
       await deleteThread(threadId)
       clearLocalThreadState(threadId)
@@ -3584,8 +3584,12 @@ export function useDesktopState() {
       if (selectedThreadId.value === threadId) {
         setSelectedThreadId('')
       }
+      error.value = ''
+      return ''
     } catch (unknownError) {
-      error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      error.value = message
+      return message
     }
   }
 

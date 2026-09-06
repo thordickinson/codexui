@@ -1078,8 +1078,16 @@ function onArchiveThread(threadId: string): void {
   void archiveThreadById(threadId)
 }
 
-function onDeleteThread(threadId: string): void {
-  void deleteThreadById(threadId)
+function formatDeleteThreadError(message: string): string {
+  if (message.toLowerCase().includes('already has an active writer')) {
+    return 'This thread is active in another Codex client. Stop its running turn or close that client, then try again.'
+  }
+  return message || 'Failed to delete thread.'
+}
+
+async function onDeleteThread(payload: { threadId: string; complete: (errorMessage?: string) => void }): Promise<void> {
+  const errorMessage = await deleteThreadById(payload.threadId)
+  payload.complete(errorMessage ? formatDeleteThreadError(errorMessage) : undefined)
 }
 
 function onStartNewThread(projectName: string): void {

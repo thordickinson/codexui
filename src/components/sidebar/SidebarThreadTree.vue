@@ -503,9 +503,12 @@
           <p class="rename-thread-subtitle">
             This permanently deletes "{{ deleteThreadTitle }}" and any spawned child threads.
           </p>
+          <p v-if="deleteThreadError" class="rename-thread-error" role="alert">{{ deleteThreadError }}</p>
           <div class="rename-thread-actions">
-            <button class="rename-thread-button" type="button" @click="closeDeleteThreadDialog">Cancel</button>
-            <button class="rename-thread-button rename-thread-button-danger" type="button" @click="submitDeleteThread">Delete</button>
+            <button class="rename-thread-button" type="button" :disabled="deleteThreadPending" @click="closeDeleteThreadDialog">Cancel</button>
+            <button class="rename-thread-button rename-thread-button-danger" type="button" :disabled="deleteThreadPending" @click="submitDeleteThread">
+              {{ deleteThreadPending ? 'Deleting…' : 'Delete' }}
+            </button>
           </div>
         </div>
       </div>
@@ -551,7 +554,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [threadId: string]
   archive: [threadId: string]
-  delete: [threadId: string]
+  delete: [payload: { threadId: string; complete: (errorMessage?: string) => void }]
   'start-new-thread': [projectName: string]
   'browse-project-files': [projectName: string]
   'open-project-git-menu': [projectName: string]
@@ -616,6 +619,8 @@ const renameThreadInputRef = ref<HTMLInputElement | null>(null)
 const deleteThreadDialogVisible = ref(false)
 const deleteThreadDialogThreadId = ref('')
 const deleteThreadTitle = ref('')
+const deleteThreadPending = ref(false)
+const deleteThreadError = ref('')
 const groupsContainerRef = ref<HTMLElement | null>(null)
 const pendingProjectDrag = ref<PendingProjectDrag | null>(null)
 const activeProjectDrag = ref<ActiveProjectDrag | null>(null)
@@ -1060,22 +1065,38 @@ function submitRenameThread(): void {
 function openDeleteThreadDialog(threadId: string, currentTitle: string): void {
   deleteThreadDialogThreadId.value = threadId
   deleteThreadTitle.value = currentTitle
+  deleteThreadPending.value = false
+  deleteThreadError.value = ''
   deleteThreadDialogVisible.value = true
   closeThreadMenu()
 }
 
 function closeDeleteThreadDialog(): void {
+  if (deleteThreadPending.value) return
   deleteThreadDialogVisible.value = false
   deleteThreadDialogThreadId.value = ''
   deleteThreadTitle.value = ''
+  deleteThreadError.value = ''
 }
 
 function submitDeleteThread(): void {
   const threadId = deleteThreadDialogThreadId.value
-  if (!threadId) return
-  pinnedThreadIds.value = pinnedThreadIds.value.filter((id) => id !== threadId)
-  emit('delete', threadId)
-  closeDeleteThreadDialog()
+  if (!threadId || deleteThreadPending.value) return
+  deleteThreadPending.value = true
+  deleteThreadError.value = ''
+  emit('delete', {
+    threadId,
+    complete: (errorMessage?: string) => {
+      if (deleteThreadDialogThreadId.value !== threadId) return
+      deleteThreadPending.value = false
+      if (errorMessage) {
+        deleteThreadError.value = errorMessage
+        return
+      }
+      pinnedThreadIds.value = pinnedThreadIds.value.filter((id) => id !== threadId)
+      closeDeleteThreadDialog()
+    },
+  })
 }
 
 function getProjectDisplayName(projectName: string): string {
@@ -2200,6 +2221,10 @@ onBeforeUnmount(() => {
   @apply mt-1 mb-3 text-sm text-zinc-500;
 }
 
+.rename-thread-error {
+  @apply my-3 rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700;
+}
+
 .rename-thread-input {
   @apply w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500;
 }
@@ -2209,7 +2234,7 @@ onBeforeUnmount(() => {
 }
 
 .rename-thread-button {
-  @apply rounded-md px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100;
+  @apply rounded-md px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60;
 }
 
 .rename-thread-button-primary {
