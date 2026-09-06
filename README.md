@@ -106,6 +106,7 @@ termux-wake-lock
 - 🗂️ Searchable project picker in new-thread flow
 - ➕ Inline "Add new project" input inside picker (no browser prompt)
 - 📌 New projects get pinned to top automatically
+- 🔁 Pinned projects, pinned conversations, and open/closed project folders sync across browser sessions
 - 🧠 Smart default new-project name suggestion via server-side free-directory scan (`New Project (N)`)
 - 🔄 Project order persisted globally to workspace roots state
 - 🧵 Optimistic in-progress threads preserved during refresh/poll cycles

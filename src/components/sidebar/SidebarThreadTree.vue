@@ -1,5 +1,65 @@
 <template>
   <section class="thread-tree-root">
+    <section v-if="pinnedProjectGroups.length > 0" class="pinned-projects-section">
+      <SidebarMenuRow as="header" class="pinned-projects-header-row">
+        <span class="pinned-projects-header">Pinned projects</span>
+      </SidebarMenuRow>
+      <article v-for="group in pinnedProjectGroups" :key="group.projectName" class="project-group project-group-pinned">
+        <SidebarMenuRow
+          as="div"
+          class="project-header-row"
+          role="button"
+          tabindex="0"
+          @click="toggleProjectCollapse(group.projectName)"
+          @keydown.enter.prevent="toggleProjectCollapse(group.projectName)"
+          @keydown.space.prevent="toggleProjectCollapse(group.projectName)"
+        >
+          <template #left>
+            <span class="project-icon-stack">
+              <span class="project-icon-folder">
+                <IconTablerFolder v-if="isCollapsed(group.projectName)" class="thread-icon" />
+                <IconTablerFolderOpen v-else class="thread-icon" />
+              </span>
+              <span class="project-icon-chevron">
+                <IconTablerChevronRight v-if="isCollapsed(group.projectName)" class="thread-icon" />
+                <IconTablerChevronDown v-else class="thread-icon" />
+              </span>
+            </span>
+          </template>
+          <span class="project-main-button"><span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span></span>
+          <template #right>
+            <div class="project-hover-controls">
+              <button class="project-pin-button" type="button" :title="getProjectPinLabel(group.projectName)" :aria-label="getProjectPinLabel(group.projectName)" @click.stop="toggleProjectPin(group.projectName)">
+                <IconTablerPin class="thread-icon" />
+              </button>
+              <button class="thread-start-button" type="button" :aria-label="getNewThreadButtonAriaLabel(group.projectName)" :title="getNewThreadButtonAriaLabel(group.projectName)" @click.stop="onStartNewThread(group.projectName)">
+                <IconTablerFilePencil class="thread-icon" />
+              </button>
+            </div>
+          </template>
+        </SidebarMenuRow>
+        <ul v-if="hasThreads(group)" class="thread-list">
+          <li v-for="thread in visibleThreads(group)" :key="thread.id" class="thread-row-item" :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'">
+            <SidebarMenuRow class="thread-row" :data-active="thread.id === selectedThreadId" :data-pinned="isPinned(thread.id)" :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'" :force-right-hover="isThreadMenuOpen(thread.id)">
+              <template #left>
+                <span class="thread-left-stack">
+                  <span v-if="thread.inProgress || thread.unread" class="thread-status-indicator" :data-state="getThreadState(thread)" :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'" />
+                  <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)"><IconTablerPin class="thread-icon" /></button>
+                </span>
+              </template>
+              <button class="thread-main-button" type="button" @click="onSelect(thread.id)"><span class="thread-row-title-wrap"><span class="thread-row-title">{{ thread.title }}</span><IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" /></span></button>
+              <template #right><span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span></template>
+              <template #right-hover>
+                <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap"><button class="thread-menu-trigger" type="button" title="thread_menu" @click.stop="toggleThreadMenu(thread.id)"><IconTablerDots class="thread-icon" /></button></div>
+              </template>
+            </SidebarMenuRow>
+          </li>
+        </ul>
+        <SidebarMenuRow v-else as="p" class="project-empty-row"><template #left><span class="project-empty-spacer" /></template><span class="project-empty">No threads</span></SidebarMenuRow>
+        <SidebarMenuRow v-if="hasHiddenThreads(group)" class="thread-show-more-row"><template #left><span class="thread-show-more-spacer" /></template><button class="thread-show-more-button" type="button" @click="toggleProjectExpansion(group.projectName)">{{ isExpanded(group.projectName) ? 'Show less' : 'Show more' }}</button></SidebarMenuRow>
+      </article>
+    </section>
+
     <section v-if="pinnedThreads.length > 0" class="pinned-section">
       <ul class="thread-list">
         <li
@@ -23,7 +83,7 @@
                   :data-state="getThreadState(thread)"
                   :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
                 />
-                <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
+                <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)">
                   <IconTablerPin class="thread-icon" />
                 </button>
               </span>
@@ -54,7 +114,20 @@
       </ul>
     </section>
 
-    <SidebarMenuRow as="header" class="thread-tree-header-row">
+    <SidebarMenuRow
+      as="header"
+      class="thread-tree-header-row"
+      role="button"
+      tabindex="0"
+      :aria-expanded="!threadsCollapsed"
+      @click="toggleThreadsCollapse"
+      @keydown.enter.prevent="toggleThreadsCollapse"
+      @keydown.space.prevent="toggleThreadsCollapse"
+    >
+      <template #left>
+        <IconTablerChevronRight v-if="threadsCollapsed" class="threads-collapse-icon" />
+        <IconTablerChevronDown v-else class="threads-collapse-icon" />
+      </template>
       <span class="thread-tree-header">Threads</span>
       <template #right>
         <div ref="organizeMenuWrapRef" class="organize-menu-wrap">
@@ -64,7 +137,7 @@
             :aria-expanded="isOrganizeMenuOpen"
             aria-label="Organize threads"
             title="Organize threads"
-            @click="toggleOrganizeMenu"
+            @click.stop="toggleOrganizeMenu"
           >
             <IconTablerDots class="thread-icon" />
           </button>
@@ -94,11 +167,12 @@
       </template>
     </SidebarMenuRow>
 
-    <p v-if="isSearchActive && filteredGroups.length === 0" class="thread-tree-no-results">No matching threads</p>
+    <template v-if="!threadsCollapsed">
+      <p v-if="isSearchActive && filteredGroups.length === 0" class="thread-tree-no-results">No matching threads</p>
 
-    <p v-else-if="isLoading && groups.length === 0" class="thread-tree-loading">Loading threads...</p>
+      <p v-else-if="isLoading && groups.length === 0" class="thread-tree-loading">Loading threads...</p>
 
-    <ul v-else-if="isChronologicalView" class="thread-list thread-list-global">
+      <ul v-else-if="isChronologicalView" class="thread-list thread-list-global">
         <li
           v-for="thread in globalThreads"
           :key="thread.id"
@@ -120,7 +194,7 @@
                 :data-state="getThreadState(thread)"
                 :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
               />
-              <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
+              <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)">
                 <IconTablerPin class="thread-icon" />
               </button>
             </span>
@@ -150,9 +224,9 @@
       </li>
     </ul>
 
-    <div v-else ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
+      <div v-else ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
       <article
-        v-for="group in filteredGroups"
+        v-for="group in unpinnedProjectGroups"
         :key="group.projectName"
         :ref="(el) => setProjectGroupRef(group.projectName, el)"
         class="project-group"
@@ -192,6 +266,15 @@
             </span>
             <template #right>
               <div class="project-hover-controls">
+                <button
+                  class="project-pin-button"
+                  type="button"
+                  :title="getProjectPinLabel(group.projectName)"
+                  :aria-label="getProjectPinLabel(group.projectName)"
+                  @click.stop="toggleProjectPin(group.projectName)"
+                >
+                  <IconTablerPin class="thread-icon" />
+                </button>
                 <div :ref="(el) => setProjectMenuWrapRef(group.projectName, el)" class="project-menu-wrap">
                   <button
                     class="project-menu-trigger"
@@ -325,7 +408,7 @@
                       :data-state="getThreadState(thread)"
                       :title="thread.inProgress ? 'Turn in progress' : 'Unread messages'"
                     />
-                    <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
+                    <button class="thread-pin-button" type="button" :title="getThreadPinLabel(thread.id)" :aria-label="getThreadPinLabel(thread.id)" @click="togglePin(thread.id)">
                       <IconTablerPin class="thread-icon" />
                     </button>
                   </span>
@@ -371,7 +454,8 @@
             </button>
           </SidebarMenuRow>
       </article>
-    </div>
+      </div>
+    </template>
 
     <Teleport to="body">
       <div
@@ -434,8 +518,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
+import { getSidebarState, setSidebarState, type SidebarState } from '../../api/codexGateway'
 import type { UiGitRepositoryState, UiProjectGroup, UiThread } from '../../types/codex'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
@@ -446,6 +531,13 @@ import IconTablerFolderOpen from '../icons/IconTablerFolderOpen.vue'
 import IconTablerGitFork from '../icons/IconTablerGitFork.vue'
 import IconTablerPin from '../icons/IconTablerPin.vue'
 import SidebarMenuRow from './SidebarMenuRow.vue'
+import {
+  PINNED_PROJECT_IDS_STORAGE_KEY,
+  PINNED_THREAD_IDS_STORAGE_KEY,
+  loadPinnedIds,
+  persistPinnedIds,
+  prunePinnedIds,
+} from '../../utils/pinnedState'
 
 const props = defineProps<{
   groups: UiProjectGroup[]
@@ -511,7 +603,8 @@ const DRAG_START_THRESHOLD_PX = 4
 const PROJECT_GROUP_EXPANDED_GAP_PX = 6
 const expandedProjects = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
-const pinnedThreadIds = ref<string[]>([])
+const pinnedThreadIds = ref<string[]>(loadPinnedIds(PINNED_THREAD_IDS_STORAGE_KEY))
+const pinnedProjectIds = ref<string[]>(loadPinnedIds(PINNED_PROJECT_IDS_STORAGE_KEY))
 const openProjectMenuId = ref('')
 const openThreadMenuId = ref('')
 const projectMenuDirectionById = ref<Record<string, MenuDirection>>({})
@@ -542,7 +635,10 @@ const organizeMenuWrapRef = ref<HTMLElement | null>(null)
 const openThreadMenuPanelRef = ref<HTMLElement | null>(null)
 const isOrganizeMenuOpen = ref(false)
 const THREAD_VIEW_MODE_STORAGE_KEY = 'codex-web-local.thread-view-mode.v1'
+const THREADS_COLLAPSED_STORAGE_KEY = 'codex-web-local.threads-collapsed.v1'
+const SHARED_SIDEBAR_STATE_SAVE_DEBOUNCE_MS = 120
 const threadViewMode = ref<'project' | 'chronological'>(loadThreadViewMode())
+const threadsCollapsed = ref(loadThreadsCollapsed())
 const projectGroupResizeObserver =
   typeof window !== 'undefined'
     ? new ResizeObserver((entries) => {
@@ -555,6 +651,12 @@ const projectGroupResizeObserver =
       })
     : null
 const COLLAPSED_STORAGE_KEY = 'codex-web-local.collapsed-projects.v1'
+let hasHydratedSharedSidebarState = false
+let changedBeforeSharedSidebarHydration = false
+let isApplyingSharedSidebarState = false
+let sharedSidebarStateSaveTimer: number | null = null
+let queuedSharedSidebarState: Omit<SidebarState, 'configured'> | null = null
+let isSavingSharedSidebarState = false
 
 function loadCollapsedState(): Record<string, boolean> {
   if (typeof window === 'undefined') return {}
@@ -577,6 +679,11 @@ function loadThreadViewMode(): 'project' | 'chronological' {
   return raw === 'chronological' ? 'chronological' : 'project'
 }
 
+function loadThreadsCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.localStorage.getItem(THREADS_COLLAPSED_STORAGE_KEY) === 'true'
+}
+
 collapsedProjects.value = loadCollapsedState()
 
 watch(
@@ -584,14 +691,109 @@ watch(
   (value) => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(value))
+    queueSharedSidebarStateSave()
   },
-  { deep: true },
+  { deep: true, flush: 'sync' },
 )
 
 watch(threadViewMode, (value) => {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(THREAD_VIEW_MODE_STORAGE_KEY, value)
 })
+
+watch(threadsCollapsed, (value) => {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(THREADS_COLLAPSED_STORAGE_KEY, String(value))
+})
+
+watch(pinnedThreadIds, (ids) => {
+  persistPinnedIds(PINNED_THREAD_IDS_STORAGE_KEY, ids)
+  queueSharedSidebarStateSave()
+}, { flush: 'sync' })
+watch(pinnedProjectIds, (ids) => {
+  persistPinnedIds(PINNED_PROJECT_IDS_STORAGE_KEY, ids)
+  queueSharedSidebarStateSave()
+}, { flush: 'sync' })
+
+function createSharedSidebarState(): Omit<SidebarState, 'configured'> {
+  return {
+    pinnedThreadIds: [...pinnedThreadIds.value],
+    pinnedProjectIds: [...pinnedProjectIds.value],
+    collapsedProjectIds: Object.entries(collapsedProjects.value)
+      .filter(([, collapsed]) => collapsed === true)
+      .map(([projectName]) => projectName),
+  }
+}
+
+function queueSharedSidebarStateSave(): void {
+  if (isApplyingSharedSidebarState || typeof window === 'undefined') return
+  if (!hasHydratedSharedSidebarState) {
+    changedBeforeSharedSidebarHydration = true
+    return
+  }
+
+  if (sharedSidebarStateSaveTimer !== null) {
+    window.clearTimeout(sharedSidebarStateSaveTimer)
+  }
+  sharedSidebarStateSaveTimer = window.setTimeout(() => {
+    sharedSidebarStateSaveTimer = null
+    queuedSharedSidebarState = createSharedSidebarState()
+    void flushSharedSidebarStateSave()
+  }, SHARED_SIDEBAR_STATE_SAVE_DEBOUNCE_MS)
+}
+
+async function flushSharedSidebarStateSave(): Promise<void> {
+  if (isSavingSharedSidebarState) return
+  isSavingSharedSidebarState = true
+  try {
+    while (queuedSharedSidebarState) {
+      const nextState = queuedSharedSidebarState
+      queuedSharedSidebarState = null
+      try {
+        await setSidebarState(nextState)
+      } catch {
+        // Keep local storage as a fallback when shared persistence is unavailable.
+      }
+    }
+  } finally {
+    isSavingSharedSidebarState = false
+  }
+}
+
+async function syncSharedSidebarState(isInitialLoad = false): Promise<void> {
+  if (!isInitialLoad && (sharedSidebarStateSaveTimer !== null || queuedSharedSidebarState || isSavingSharedSidebarState)) {
+    return
+  }
+
+  try {
+    const state = await getSidebarState()
+    if (isInitialLoad && (!state.configured || changedBeforeSharedSidebarHydration)) {
+      hasHydratedSharedSidebarState = true
+      queuedSharedSidebarState = createSharedSidebarState()
+      void flushSharedSidebarStateSave()
+      return
+    }
+
+    isApplyingSharedSidebarState = true
+    pinnedThreadIds.value = [...state.pinnedThreadIds]
+    pinnedProjectIds.value = [...state.pinnedProjectIds]
+    collapsedProjects.value = Object.fromEntries(
+      state.collapsedProjectIds.map((projectName) => [projectName, true]),
+    )
+    await nextTick()
+  } catch {
+    // Keep local storage state when the shared endpoint is unavailable.
+  } finally {
+    isApplyingSharedSidebarState = false
+    hasHydratedSharedSidebarState = true
+  }
+}
+
+function syncSharedSidebarStateWhenVisible(): void {
+  if (document.visibilityState === 'visible') {
+    void syncSharedSidebarState()
+  }
+}
 
 watch(
   () => props.projectGitStateById[openProjectMenuId.value],
@@ -628,6 +830,19 @@ const filteredGroups = computed<UiProjectGroup[]>(() => {
     }))
     .filter((group) => group.threads.length > 0)
 })
+
+const pinnedProjectGroups = computed<UiProjectGroup[]>(() => {
+  const groupByProjectName = new Map(filteredGroups.value.map((group) => [group.projectName, group]))
+  return pinnedProjectIds.value
+    .map((projectName) => groupByProjectName.get(projectName) ?? null)
+    .filter((group): group is UiProjectGroup => group !== null)
+})
+
+const unpinnedProjectGroups = computed<UiProjectGroup[]>(() =>
+  filteredGroups.value.filter((group) => !isProjectPinned(group.projectName)),
+)
+
+const visibleProjectGroups = unpinnedProjectGroups
 
 const isChronologicalView = computed(() => threadViewMode.value === 'chronological')
 
@@ -675,16 +890,16 @@ const pinnedThreads = computed(() =>
 
 const projectedDropProjectIndex = computed<number | null>(() => {
   const drag = activeProjectDrag.value
-  if (!drag || drag.dropTargetIndexFull === null || props.groups.length === 0) return null
+  if (!drag || drag.dropTargetIndexFull === null || visibleProjectGroups.value.length === 0) return null
 
-  const boundedDropIndex = Math.max(0, Math.min(drag.dropTargetIndexFull, props.groups.length))
+  const boundedDropIndex = Math.max(0, Math.min(drag.dropTargetIndexFull, visibleProjectGroups.value.length))
   const projectedIndex = boundedDropIndex > drag.fromIndex ? boundedDropIndex - 1 : boundedDropIndex
-  const boundedProjectedIndex = Math.max(0, Math.min(projectedIndex, props.groups.length - 1))
+  const boundedProjectedIndex = Math.max(0, Math.min(projectedIndex, visibleProjectGroups.value.length - 1))
   return boundedProjectedIndex === drag.fromIndex ? null : boundedProjectedIndex
 })
 
 const layoutProjectOrder = computed<string[]>(() => {
-  const sourceGroups = isSearchActive.value ? filteredGroups.value : props.groups
+  const sourceGroups = visibleProjectGroups.value
   const names = sourceGroups.map((group) => group.projectName)
   const drag = activeProjectDrag.value
   const projectedIndex = projectedDropProjectIndex.value
@@ -746,6 +961,10 @@ function isPinned(threadId: string): boolean {
   return pinnedThreadIds.value.includes(threadId)
 }
 
+function getThreadPinLabel(threadId: string): string {
+  return isPinned(threadId) ? 'Unpin conversation' : 'Pin conversation'
+}
+
 function togglePin(threadId: string): void {
   if (isPinned(threadId)) {
     pinnedThreadIds.value = pinnedThreadIds.value.filter((id) => id !== threadId)
@@ -753,6 +972,23 @@ function togglePin(threadId: string): void {
   }
 
   pinnedThreadIds.value = [threadId, ...pinnedThreadIds.value]
+}
+
+function isProjectPinned(projectName: string): boolean {
+  return pinnedProjectIds.value.includes(projectName)
+}
+
+function getProjectPinLabel(projectName: string): string {
+  return isProjectPinned(projectName) ? 'Unpin project' : 'Pin project'
+}
+
+function toggleProjectPin(projectName: string): void {
+  if (isProjectPinned(projectName)) {
+    pinnedProjectIds.value = pinnedProjectIds.value.filter((id) => id !== projectName)
+    return
+  }
+
+  pinnedProjectIds.value = [projectName, ...pinnedProjectIds.value]
 }
 
 function onSelect(threadId: string): void {
@@ -870,6 +1106,10 @@ function setThreadViewMode(mode: 'project' | 'chronological'): void {
   isOrganizeMenuOpen.value = false
 }
 
+function toggleThreadsCollapse(): void {
+  threadsCollapsed.value = !threadsCollapsed.value
+}
+
 function toggleProjectMenu(projectName: string): void {
   if (openProjectMenuId.value === projectName) {
     closeProjectMenu()
@@ -936,6 +1176,7 @@ function onProjectNameInput(projectName: string): void {
 }
 
 function onRemoveProject(projectName: string): void {
+  pinnedProjectIds.value = pinnedProjectIds.value.filter((id) => id !== projectName)
   emit('remove-project', projectName)
   closeProjectMenu()
 }
@@ -946,6 +1187,7 @@ function onBrowseProjectFiles(projectName: string): void {
 }
 
 function onProjectHeaderKeyDown(event: KeyboardEvent, projectName: string): void {
+  if (isProjectPinned(projectName)) return
   if (!event.altKey) return
   if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
 
@@ -1258,9 +1500,10 @@ function setProjectGroupRef(projectName: string, element: Element | ComponentPub
 
 function onProjectHandleMouseDown(event: MouseEvent, projectName: string): void {
   if (event.button !== 0) return
+  if (isProjectPinned(projectName)) return
   if (pendingProjectDrag.value || activeProjectDrag.value) return
 
-  const fromIndex = props.groups.findIndex((group) => group.projectName === projectName)
+  const fromIndex = visibleProjectGroups.value.findIndex((group) => group.projectName === projectName)
   const projectGroupElement = projectGroupElementByName.get(projectName)
   if (fromIndex < 0 || !projectGroupElement) return
 
@@ -1311,8 +1554,8 @@ function onProjectDragMouseUp(event: MouseEvent): void {
   const drag = activeProjectDrag.value
   if (drag && projectedDropProjectIndex.value !== null) {
     const currentProjectIndex = props.groups.findIndex((group) => group.projectName === drag.projectName)
-    if (currentProjectIndex >= 0) {
-      const toIndex = projectedDropProjectIndex.value
+    const toIndex = getReorderTargetIndex(projectedDropProjectIndex.value)
+    if (currentProjectIndex >= 0 && toIndex !== null) {
       if (toIndex !== currentProjectIndex) {
         emit('reorder-project', {
           projectName: drag.projectName,
@@ -1323,6 +1566,15 @@ function onProjectDragMouseUp(event: MouseEvent): void {
   }
 
   resetProjectDragState()
+}
+
+function getReorderTargetIndex(projectedDisplayIndex: number): number | null {
+  const unpinnedProjectIndices = props.groups
+    .map((group, index) => ({ projectName: group.projectName, index }))
+    .filter(({ projectName }) => !isProjectPinned(projectName))
+
+  if (projectedDisplayIndex < 0 || projectedDisplayIndex >= unpinnedProjectIndices.length) return null
+  return unpinnedProjectIndices[projectedDisplayIndex]?.index ?? null
 }
 
 function onProjectDragKeyDown(event: KeyboardEvent): void {
@@ -1405,13 +1657,13 @@ function updateProjectDropTarget(sample: DragPointerSample): void {
   }
 
   const containerRect = groupsContainer.getBoundingClientRect()
-  const projectIndexByName = new Map(props.groups.map((group, index) => [group.projectName, index]))
-  const nonDraggedProjectNames = props.groups
+  const projectIndexByName = new Map(visibleProjectGroups.value.map((group, index) => [group.projectName, index]))
+  const nonDraggedProjectNames = visibleProjectGroups.value
     .map((group) => group.projectName)
-    .filter((projectName) => projectName !== drag.projectName)
+    .filter((projectName) => projectName !== drag.projectName && !isProjectPinned(projectName))
 
   let accumulatedTop = 0
-  let nextDropTarget = props.groups.length
+  let nextDropTarget = visibleProjectGroups.value.length
 
   for (const projectName of nonDraggedProjectNames) {
     const originalIndex = projectIndexByName.get(projectName)
@@ -1504,8 +1756,11 @@ function getThreadState(thread: UiThread): 'working' | 'unread' | 'idle' {
 }
 
 watch(
-  () => props.groups.map((group) => group.projectName),
-  (projectNames) => {
+  () => ({
+    projectNames: props.groups.map((group) => group.projectName),
+    threadIds: props.groups.flatMap((group) => group.threads.map((thread) => thread.id)),
+  }),
+  ({ projectNames, threadIds }) => {
     const dragProjectName = activeProjectDrag.value?.projectName ?? pendingProjectDrag.value?.projectName ?? ''
     if (dragProjectName && !props.groups.some((group) => group.projectName === dragProjectName)) {
       resetProjectDragState()
@@ -1518,6 +1773,26 @@ watch(
 
     if (Object.keys(nextMeasuredHeights).length !== Object.keys(measuredHeightByProject.value).length) {
       measuredHeightByProject.value = nextMeasuredHeights
+    }
+
+    const validThreadIds = new Set(threadIds)
+    const nextPinnedThreadIds = prunePinnedIds(pinnedThreadIds.value, validThreadIds)
+    if (nextPinnedThreadIds.length !== pinnedThreadIds.value.length) {
+      pinnedThreadIds.value = nextPinnedThreadIds
+    }
+
+    const nextPinnedProjectIds = prunePinnedIds(pinnedProjectIds.value, projectNameSet)
+    if (nextPinnedProjectIds.length !== pinnedProjectIds.value.length) {
+      pinnedProjectIds.value = nextPinnedProjectIds
+    }
+
+    const nextCollapsedProjects = Object.fromEntries(
+      Object.entries(collapsedProjects.value).filter(([projectName, collapsed]) => (
+        collapsed === true && projectNameSet.has(projectName)
+      )),
+    ) as Record<string, boolean>
+    if (Object.keys(nextCollapsedProjects).length !== Object.keys(collapsedProjects.value).length) {
+      collapsedProjects.value = nextCollapsedProjects
     }
   },
 )
@@ -1547,7 +1822,21 @@ watch(openThreadMenuId, (threadId) => {
   })
 })
 
+onMounted(() => {
+  void syncSharedSidebarState(true)
+  window.addEventListener('focus', syncSharedSidebarStateWhenVisible)
+  document.addEventListener('visibilitychange', syncSharedSidebarStateWhenVisible)
+})
+
 onBeforeUnmount(() => {
+  if (sharedSidebarStateSaveTimer !== null) {
+    window.clearTimeout(sharedSidebarStateSaveTimer)
+    sharedSidebarStateSaveTimer = null
+    queuedSharedSidebarState = createSharedSidebarState()
+    void flushSharedSidebarStateSave()
+  }
+  window.removeEventListener('focus', syncSharedSidebarStateWhenVisible)
+  document.removeEventListener('visibilitychange', syncSharedSidebarStateWhenVisible)
   for (const element of projectGroupElementByName.values()) {
     projectGroupResizeObserver?.unobserve(element)
   }
@@ -1570,12 +1859,28 @@ onBeforeUnmount(() => {
   @apply mb-1;
 }
 
-.thread-tree-header-row {
+.pinned-projects-section {
+  @apply mb-1;
+}
+
+.pinned-projects-header-row {
   @apply cursor-default;
+}
+
+.pinned-projects-header {
+  @apply text-sm font-normal text-zinc-500 select-none;
+}
+
+.thread-tree-header-row {
+  @apply cursor-pointer hover:bg-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400;
 }
 
 .thread-tree-header {
   @apply text-sm font-normal text-zinc-500 select-none;
+}
+
+.threads-collapse-icon {
+  @apply h-4 w-4 text-zinc-500;
 }
 
 .organize-menu-wrap {
@@ -1660,6 +1965,16 @@ onBeforeUnmount(() => {
 
 .project-hover-controls {
   @apply flex items-center gap-1;
+}
+
+.project-pin-button {
+  @apply h-4 w-4 rounded p-0 text-zinc-500 opacity-0 transition flex items-center justify-center hover:bg-zinc-200 hover:text-zinc-700;
+}
+
+.project-group-pinned .project-pin-button,
+.project-header-row:hover .project-pin-button,
+.project-header-row:focus-within .project-pin-button {
+  @apply opacity-100;
 }
 
 .project-menu-trigger {

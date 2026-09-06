@@ -51,6 +51,12 @@ type WorkspaceRootsState = {
   active: string[]
 }
 
+type SidebarState = {
+  pinnedThreadIds: string[]
+  pinnedProjectIds: string[]
+  collapsedProjectIds: string[]
+}
+
 type PendingServerRequest = {
   id: number
   method: string
@@ -732,6 +738,10 @@ function getCodexGlobalStatePath(): string {
   return join(getCodexHomeDir(), '.codex-global-state.json')
 }
 
+function getSidebarStatePath(): string {
+  return join(getCodexHomeDir(), 'codexui-sidebar-state.json')
+}
+
 function getCodexSessionIndexPath(): string {
   return join(getCodexHomeDir(), 'session_index.jsonl')
 }
@@ -927,6 +937,36 @@ async function writeWorkspaceRootsState(nextState: WorkspaceRootsState): Promise
   payload['active-workspace-roots'] = normalizeStringArray(nextState.active)
 
   await writeFile(statePath, JSON.stringify(payload), 'utf8')
+}
+
+async function readSidebarState(): Promise<SidebarState & { configured: boolean }> {
+  try {
+    const raw = await readFile(getSidebarStatePath(), 'utf8')
+    const payload = asRecord(JSON.parse(raw)) ?? {}
+    return {
+      configured: true,
+      pinnedThreadIds: normalizeStringArray(payload.pinnedThreadIds),
+      pinnedProjectIds: normalizeStringArray(payload.pinnedProjectIds),
+      collapsedProjectIds: normalizeStringArray(payload.collapsedProjectIds),
+    }
+  } catch {
+    return {
+      configured: false,
+      pinnedThreadIds: [],
+      pinnedProjectIds: [],
+      collapsedProjectIds: [],
+    }
+  }
+}
+
+async function writeSidebarState(nextState: SidebarState): Promise<void> {
+  const statePath = getSidebarStatePath()
+  await mkdir(dirname(statePath), { recursive: true })
+  await writeFile(statePath, JSON.stringify({
+    pinnedThreadIds: normalizeStringArray(nextState.pinnedThreadIds),
+    pinnedProjectIds: normalizeStringArray(nextState.pinnedProjectIds),
+    collapsedProjectIds: normalizeStringArray(nextState.collapsedProjectIds),
+  }), 'utf8')
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -1655,6 +1695,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/codex-api/sidebar-state') {
+        const state = await readSidebarState()
+        setJson(res, 200, { data: state })
+        return
+      }
+
       if (req.method === 'GET' && url.pathname === '/codex-api/home-directory') {
         setJson(res, 200, { data: { path: homedir() } })
         return
@@ -1818,6 +1864,21 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           active: normalizeStringArray(record.active),
         }
         await writeWorkspaceRootsState(nextState)
+        setJson(res, 200, { ok: true })
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/codex-api/sidebar-state') {
+        const payload = asRecord(await readJsonBody(req))
+        if (!payload) {
+          setJson(res, 400, { error: 'Invalid body: expected object' })
+          return
+        }
+        await writeSidebarState({
+          pinnedThreadIds: normalizeStringArray(payload.pinnedThreadIds),
+          pinnedProjectIds: normalizeStringArray(payload.pinnedProjectIds),
+          collapsedProjectIds: normalizeStringArray(payload.collapsedProjectIds),
+        })
         setJson(res, 200, { ok: true })
         return
       }

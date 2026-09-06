@@ -119,6 +119,13 @@ export type WorkspaceRootsState = {
   active: string[]
 }
 
+export type SidebarState = {
+  configured: boolean
+  pinnedThreadIds: string[]
+  pinnedProjectIds: string[]
+  collapsedProjectIds: string[]
+}
+
 export type RuntimeInfo = {
   codexCliVersion: string
 }
@@ -1622,6 +1629,32 @@ function normalizeWorkspaceRootsState(payload: unknown): WorkspaceRootsState {
   }
 }
 
+function normalizeSidebarState(payload: unknown): SidebarState {
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {}
+
+  const normalizeArray = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return []
+    const next: string[] = []
+    for (const item of value) {
+      if (typeof item !== 'string') continue
+      const normalized = item.trim()
+      if (normalized && !next.includes(normalized)) {
+        next.push(normalized)
+      }
+    }
+    return next
+  }
+
+  return {
+    configured: record.configured === true,
+    pinnedThreadIds: normalizeArray(record.pinnedThreadIds),
+    pinnedProjectIds: normalizeArray(record.pinnedProjectIds),
+    collapsedProjectIds: normalizeArray(record.collapsedProjectIds),
+  }
+}
+
 function normalizeGitBranch(value: unknown): UiGitBranch | null {
   const record = asRecord(value)
   const name = readString(record?.name)
@@ -1679,6 +1712,30 @@ export async function getWorkspaceRootsState(): Promise<WorkspaceRootsState> {
       ? (payload as Record<string, unknown>)
       : {}
   return normalizeWorkspaceRootsState(envelope.data)
+}
+
+export async function getSidebarState(): Promise<SidebarState> {
+  const response = await fetch('/codex-api/sidebar-state')
+  const payload = (await response.json()) as unknown
+  if (!response.ok) {
+    throw new Error('Failed to load shared sidebar state')
+  }
+  const envelope =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {}
+  return normalizeSidebarState(envelope.data)
+}
+
+export async function setSidebarState(nextState: Omit<SidebarState, 'configured'>): Promise<void> {
+  const response = await fetch('/codex-api/sidebar-state', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(nextState),
+  })
+  if (!response.ok) {
+    throw new Error('Failed to save shared sidebar state')
+  }
 }
 
 export async function getGitRepositoryState(cwd: string): Promise<UiGitRepositoryState> {

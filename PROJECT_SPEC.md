@@ -277,6 +277,9 @@ All frontend state is managed by `useDesktopState()` — a single Vue composable
 | `codex-web-local.selected-thread-id.v1` | Last selected thread |
 | `codex-web-local.project-order.v1` | Custom project ordering |
 | `codex-web-local.project-display-name.v1` | Custom project names |
+| `codex-web-local.pinned-thread-ids.v1` | Cached pinned conversations; synchronized through the server |
+| `codex-web-local.pinned-project-ids.v1` | Cached pinned projects; synchronized through the server |
+| `codex-web-local.collapsed-projects.v1` | Cached expanded/collapsed project state; synchronized through the server |
 | `codex-web-local.auto-refresh-enabled.v1` | Auto-refresh preference |
 | `codex-web-local.sidebar-collapsed.v1` | Sidebar collapse state |
 
