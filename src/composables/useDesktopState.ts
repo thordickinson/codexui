@@ -1001,6 +1001,7 @@ export function useDesktopState() {
   const error = ref('')
   const isPolling = ref(false)
   const hasLoadedThreads = ref(false)
+  let hasAttemptedInitialRefresh = false
   let stopNotificationStream: (() => void) | null = null
   let eventSyncTimer: number | null = null
   let threadStatusPollTimer: number | null = null
@@ -3353,7 +3354,20 @@ export function useDesktopState() {
     }
   }
 
-  async function loadThreads() {
+  let threadListRequest: Promise<void> | null = null
+
+  async function loadThreads(): Promise<void> {
+    if (threadListRequest) return threadListRequest
+    const request = refreshThreadList()
+    threadListRequest = request
+    try {
+      await request
+    } finally {
+      if (threadListRequest === request) threadListRequest = null
+    }
+  }
+
+  async function refreshThreadList() {
     if (!hasLoadedThreads.value) {
       isLoadingThreads.value = true
     }
@@ -3427,6 +3441,8 @@ export function useDesktopState() {
   }
 
   async function recoverHistoryPage(threadId: string, page: ThreadHistoryPage): Promise<void> {
+    // Recover a turn's patches only once its earlier items have been loaded.
+    if (page.partialTurnId) return
     const recovered = await recoverThreadPageFileChanges(threadId, page.messages, orderedTurnIds(page.turnIndexByTurnId))
     const originalIds = new Set(page.messages.map((message) => message.id))
     const extras = recovered.filter((message) => !originalIds.has(message.id))
@@ -3460,13 +3476,16 @@ export function useDesktopState() {
       const existingIds = new Set(alreadyLoaded
         ? (persistedMessagesByThreadId.value[threadId] ?? []).flatMap((message) => message.turnId ? [message.turnId] : [])
         : [])
+      const existingMessageIds = new Set(alreadyLoaded
+        ? (persistedMessagesByThreadId.value[threadId] ?? []).map((message) => message.id)
+        : [])
       // Catch up to our existing window after inactivity without leaving a gap.
-      while (page.nextCursor && existingIds.size > 0
-        && !Object.keys(page.turnIndexByTurnId).some((id) => existingIds.has(id))) {
+      while (page.nextCursor && existingMessageIds.size > 0
+        && !page.messages.some((message) => existingMessageIds.has(message.id))) {
         const older = await getThreadDetail(threadId, page.nextCursor)
         if (older.nextCursor === page.nextCursor) throw new Error('Conversation history cursor did not advance')
         const merged = mergeThreadHistory(page.messages, orderedTurnIds(page.turnIndexByTurnId), older, true)
-        page = { ...page, ...merged, nextCursor: older.nextCursor }
+        page = { ...page, ...merged, nextCursor: older.nextCursor, partialTurnId: older.partialTurnId }
       }
       if (historyRequestTokens.get(threadId) !== token) return
       const overlaps = Object.keys(page.turnIndexByTurnId).some((id) => existingIds.has(id))
@@ -3608,6 +3627,17 @@ export function useDesktopState() {
     const awaitAncillaryRefreshes = options.awaitAncillaryRefreshes === true
 
     try {
+      const initialThreadId = selectedThreadId.value
+      let initialMessageError = ''
+      // Show the requested conversation before scanning every sidebar thread.
+      if (includeSelectedThreadMessages && initialThreadId) {
+        try {
+          await loadMessages(initialThreadId)
+        } catch (unknownError) {
+          // A deleted remembered thread must not prevent sidebar recovery.
+          initialMessageError = unknownError instanceof Error ? unknownError.message : 'Failed to load conversation'
+        }
+      }
       await loadThreads()
       const ancillaryRefresh = Promise.allSettled([
         refreshModelPreferences(),
@@ -3617,8 +3647,10 @@ export function useDesktopState() {
         refreshCodexRateLimits(),
         refreshWorkspaceMessages(),
       ]).then(() => undefined)
-      if (includeSelectedThreadMessages) {
+      if (includeSelectedThreadMessages && selectedThreadId.value !== initialThreadId) {
         await loadMessages(selectedThreadId.value)
+      } else if (initialMessageError) {
+        error.value = initialMessageError
       }
       if (awaitAncillaryRefreshes) {
         await ancillaryRefresh
@@ -3627,6 +3659,8 @@ export function useDesktopState() {
       }
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+    } finally {
+      hasAttemptedInitialRefresh = true
     }
   }
 
@@ -4622,16 +4656,17 @@ export function useDesktopState() {
 
     if (stopNotificationStream) return
     void loadPendingServerRequestsFromBridge()
-    void syncThreadStatus()
+    if (hasLoadedThreads.value) void syncThreadStatus()
     threadStatusPollTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && (hasLoadedThreads.value || hasAttemptedInitialRefresh)) {
         void syncThreadStatus()
       }
     }, THREAD_STATUS_POLL_INTERVAL_MS)
     stopNotificationStream = subscribeCodexNotifications((notification) => {
       if (notification.method === 'ready') {
         clearAllTransientTurnErrors()
-        void recoverBridgeState()
+        // Initial loading already reads the selected conversation and sidebar.
+        if (hasLoadedThreads.value) void recoverBridgeState()
         return
       }
       applyRealtimeUpdates(notification)

@@ -542,14 +542,18 @@ async function listThreadTurnItems(threadId: string, turnId: string): Promise<Tu
   return data
 }
 
-async function callThreadItemsList(threadId: string, turnId: string, cursor: string | null): Promise<ThreadItemsListResponse> {
+async function callThreadItemsList(
+  threadId: string,
+  turnId: string,
+  cursor: string | null,
+  options: { limit: number; sortDirection: 'asc' | 'desc' } = { limit: 200, sortDirection: 'asc' },
+): Promise<ThreadItemsListResponse> {
   try {
     return await callRpc<ThreadItemsListResponse>('thread/items/list', {
       threadId,
       turnId,
       cursor,
-      limit: 200,
-      sortDirection: 'asc',
+      ...options,
     })
   } catch (error) {
     if (!isThreadItemsListUnavailable(error)) {
@@ -560,8 +564,7 @@ async function callThreadItemsList(threadId: string, turnId: string, cursor: str
       threadId,
       turnId,
       cursor,
-      limit: 200,
-      sortDirection: 'asc',
+      ...options,
     })
   }
 }
@@ -704,27 +707,64 @@ export type ThreadHistoryPage = {
   inProgress: boolean
   turnIndexByTurnId: ThreadTurnIndexById
   nextCursor: string | null
+  // The oldest turn in this page may have earlier items still unloaded.
+  partialTurnId?: string
+}
+
+type ThreadHistoryCursor = {
+  turnCursor: string | null
+  turnId: string | null
+  itemCursor: string | null
+}
+
+function encodeHistoryCursor(value: ThreadHistoryCursor): string | null {
+  return value.itemCursor || value.turnCursor ? JSON.stringify(value) : null
+}
+
+function decodeHistoryCursor(cursor: string | null): ThreadHistoryCursor {
+  if (!cursor) return { turnCursor: null, turnId: null, itemCursor: null }
+  const value = JSON.parse(cursor) as ThreadHistoryCursor
+  if (!value || !['turnCursor', 'turnId', 'itemCursor'].every((key) => {
+    const field = value[key as keyof ThreadHistoryCursor]
+    return field === null || typeof field === 'string'
+  }) || (value.itemCursor && !value.turnId)) throw new Error('Invalid conversation history cursor')
+  return value
 }
 
 async function getThreadDetailV2(threadId: string, cursor: string | null): Promise<ThreadHistoryPage> {
+  const position = decodeHistoryCursor(cursor)
   try {
-    const payload = await callRpc<ThreadTurnsListResponse>('thread/turns/list', {
-      threadId,
-      cursor,
-      limit: 10,
-      sortDirection: 'desc',
-      itemsView: 'full',
-    })
-    const turns = [...(Array.isArray(payload.data) ? payload.data : [])].reverse()
-    const hydratedTurns = await Promise.all(turns.map(async (turn) => {
-      if (turn.itemsView === 'full') return turn
-      return { ...turn, items: await listThreadTurnItems(threadId, turn.id), itemsView: 'full' as const }
-    }))
+    let turn: Turn | undefined
+    let turnCursor = position.turnCursor
+    if (position.turnId && position.itemCursor) {
+      // Only older-page requests take this branch; their status must not
+      // replace the status obtained from the newest turn.
+      turn = { id: position.turnId, items: [], itemsView: 'notLoaded', status: 'completed', error: null,
+        startedAt: null, completedAt: null, durationMs: null }
+    } else {
+      const payload = await callRpc<ThreadTurnsListResponse>('thread/turns/list', {
+        threadId,
+        cursor: turnCursor,
+        limit: 1,
+        sortDirection: 'desc',
+        itemsView: 'summary',
+      })
+      turn = payload.data?.[0]
+      turnCursor = payload.nextCursor || null
+    }
+    if (!turn) return { messages: [], inProgress: false, turnIndexByTurnId: {}, nextCursor: null }
+
+    // A turn can contain thousands of tool calls. Bound the item count too.
+    const payload = await callThreadItemsList(threadId, turn.id, position.itemCursor, { limit: 40, sortDirection: 'desc' })
+    const items = (payload.data ?? []).map(readThreadItemPageEntry)
+      .filter((item): item is Turn['items'][number] => item !== null).reverse()
+    const turns: Turn[] = [{ ...turn, items, itemsView: 'full' }]
     return {
-      messages: normalizeTurnMessagesV2(hydratedTurns),
+      messages: normalizeTurnMessagesV2(turns),
       inProgress: readThreadInProgressFromTurns(turns),
       turnIndexByTurnId: buildTurnIndexByTurnId(turns),
-      nextCursor: payload.nextCursor || null,
+      nextCursor: encodeHistoryCursor({ turnCursor, turnId: turn.id, itemCursor: payload.nextCursor || null }),
+      partialTurnId: payload.nextCursor ? turn.id : undefined,
     }
   } catch (error) {
     // Do not turn a transient page failure into an expensive full-thread read.

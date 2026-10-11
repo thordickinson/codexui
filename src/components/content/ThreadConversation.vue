@@ -904,7 +904,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ThreadScrollState, UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { useMobile } from '../../composables/useMobile'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
@@ -3565,6 +3565,12 @@ async function scheduleScrollRestore(): Promise<void> {
   })
 }
 
+// The route loading screen mounts this component with messages already set.
+// Non-immediate prop watchers never see that first load.
+onMounted(() => {
+  void scheduleScrollRestore()
+})
+
 watch(
   () => props.messages,
   async (next) => {
@@ -3655,6 +3661,7 @@ watch(
     autoFollowOutput.value = props.scrollState?.isAtBottom !== false
     modalImageUrl.value = ''
     failedMarkdownImageKeys.value = new Set()
+    void scheduleScrollRestore()
   },
   { flush: 'post' },
 )
