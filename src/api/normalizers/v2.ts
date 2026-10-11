@@ -544,6 +544,32 @@ export function normalizeTurnMessagesV2(turns: Turn[]): UiMessage[] {
   return messages
 }
 
+export function normalizeTurnSummariesV2(turns: Turn[]): UiMessage[] {
+  const summaries = turns.map((turn) => ({
+    ...turn,
+    items: turn.items.filter((item) => item.type === 'userMessage'
+      || (item.type === 'agentMessage' && item.phase !== 'commentary')),
+  }))
+  const messages = normalizeTurnMessagesV2(summaries).filter((message) => !message.isUnhandled)
+  const byTurn = new Map<string, UiMessage[]>()
+  for (const message of messages) {
+    const rows = byTurn.get(message.turnId!) ?? []
+    rows.push(message)
+    byTurn.set(message.turnId!, rows)
+  }
+  return summaries.flatMap((turn, turnIndex) => [
+    ...(byTurn.get(turn.id) ?? []),
+    {
+      id: `turn-summary:${turn.id}`,
+      role: 'system' as const,
+      text: turn.status === 'inProgress' ? 'Working…' : turn.status === 'failed' ? 'Response failed' : '',
+      messageType: 'turnSummary',
+      turnId: turn.id,
+      turnIndex,
+    },
+  ])
+}
+
 export function readThreadInProgressFromResponse(payload: ThreadReadResponse): boolean {
   const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : []
   return readThreadInProgressFromTurns(turns)

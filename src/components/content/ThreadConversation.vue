@@ -26,7 +26,9 @@
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
       >
-        <div v-if="isCommandMessage(message)" class="message-row" data-role="system">
+        <TurnWorkDetails v-if="message.messageType === 'turnSummary' && message.turnId"
+          :thread-id="activeThreadId" :turn-id="message.turnId" :status-text="message.text" />
+        <div v-else-if="isCommandMessage(message)" class="message-row" data-role="system">
           <div class="message-stack" data-role="system">
             <button
               v-if="getGroupedCommandsForLatest(message).length > 0"
@@ -906,6 +908,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ThreadScrollState, UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
+import TurnWorkDetails from './TurnWorkDetails.vue'
 import { useMobile } from '../../composables/useMobile'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'

@@ -16,7 +16,6 @@ import {
   getPendingServerRequests,
   getSkillsList,
   getThreadDetail,
-  recoverThreadPageFileChanges,
   getThreadGoal,
   getWorkspaceMessages,
   interruptThreadTurn,
@@ -44,6 +43,7 @@ import {
   type MentionParam,
   type ThreadHistoryPage,
 } from '../api/codexGateway'
+import { clearTurnWorkCache, invalidateTurnWork, refreshOpenTurnWork } from './useTurnWorkDetails'
 import { mergeThreadHistory, orderedTurnIds } from '../utils/threadHistory'
 import { normalizeFileChangeStatus, toUiFileChanges } from '../api/normalizers/v2'
 import {
@@ -584,24 +584,11 @@ function normalizeMessageText(value: string): string {
 }
 
 function removeRedundantLiveAgentMessages(previous: UiMessage[], incoming: UiMessage[]): UiMessage[] {
-  const incomingAssistantTexts = new Set(
-    incoming
-      .filter((message) => message.role === 'assistant')
-      .map((message) => normalizeMessageText(message.text))
-      .filter((text) => text.length > 0),
-  )
-
-  if (incomingAssistantTexts.size === 0) {
-    return previous
-  }
-
+  const incomingById = new Map(incoming.map((message) => [message.id, message]))
   const next = previous.filter((message) => {
-    if (message.messageType !== 'agentMessage.live') return true
-    const normalized = normalizeMessageText(message.text)
-    if (normalized.length === 0) return false
-    return !incomingAssistantTexts.has(normalized)
+    const persisted = incomingById.get(message.id)
+    return !persisted || persisted.text.length < message.text.length
   })
-
   return next.length === previous.length ? previous : next
 }
 
@@ -648,8 +635,6 @@ type TurnCompletedInfo = {
   completedAtMs: number
   startedAtMs?: number
 }
-
-const WORKED_MESSAGE_TYPE = 'worked'
 
 function createClientUserMessageId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -703,36 +688,6 @@ function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivity
     if (first.details[index] !== second.details[index]) return false
   }
   return true
-}
-
-function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
-  return {
-    id: `turn-summary:${summary.turnId}`,
-    role: 'system',
-    text: `Worked for ${formatTurnDuration(summary.durationMs)}`,
-    messageType: WORKED_MESSAGE_TYPE,
-  }
-}
-
-function findLastAssistantMessageIndex(messages: UiMessage[]): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'assistant') {
-      return index
-    }
-  }
-  return -1
-}
-
-function insertTurnSummaryMessage(messages: UiMessage[], summary: TurnSummaryState): UiMessage[] {
-  const summaryMessage = buildTurnSummaryMessage(summary)
-  const sanitizedMessages = messages.filter((message) => message.messageType !== WORKED_MESSAGE_TYPE)
-  const insertIndex = findLastAssistantMessageIndex(sanitizedMessages)
-  if (insertIndex < 0) {
-    return [...sanitizedMessages, summaryMessage]
-  }
-  const next = [...sanitizedMessages]
-  next.splice(insertIndex, 0, summaryMessage)
-  return next
 }
 
 function omitKey<TValue>(record: Record<string, TValue>, key: string): Record<string, TValue> {
@@ -1092,15 +1047,32 @@ export function useDesktopState() {
     if (!threadId) return []
 
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
-    const livePlan = livePlanMessagesByThreadId.value[threadId] ?? []
     const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
-    const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
-    const liveFileChanges = liveFileChangeMessagesByThreadId.value[threadId] ?? []
-    const combined = [...persisted, ...livePlan, ...liveCommands, ...liveFileChanges, ...liveAgent]
-
+    const byId = new Map(persisted.map((message) => [message.id, message]))
+    const lookup = turnIndexByTurnIdByThreadId.value[threadId] ?? {}
+    for (const message of liveAgent) {
+      const previous = byId.get(message.id)
+      if (!previous || message.text.length > previous.text.length) {
+        byId.set(message.id, { ...previous, ...message,
+          turnIndex: message.turnId ? lookup[message.turnId] : previous?.turnIndex })
+      }
+    }
+    const activeTurnId = activeTurnIdByThreadId.value[threadId]
     const summary = turnSummaryByThreadId.value[threadId]
-    if (!summary) return combined
-    return insertTurnSummaryMessage(combined, summary)
+    const turnId = activeTurnId || summary?.turnId
+    if (turnId) {
+      const id = `turn-summary:${turnId}`
+      byId.set(id, { ...byId.get(id), id, role: 'system', messageType: 'turnSummary',
+        turnId, turnIndex: lookup[turnId],
+        text: inProgressById.value[threadId] && activeTurnId === turnId ? 'Working…'
+          : summary?.turnId === turnId ? `Worked for ${formatTurnDuration(summary.durationMs)}` : '',
+      })
+    }
+    return [...byId.values()].sort((first, second) => {
+      const order = (first.turnIndex ?? Infinity) - (second.turnIndex ?? Infinity)
+      if (order) return order
+      return Number(first.messageType === 'turnSummary') - Number(second.messageType === 'turnSummary')
+    })
   })
 
   function setSelectedThreadId(nextThreadId: string): void {
@@ -2795,7 +2767,7 @@ export function useDesktopState() {
     return ''
   }
 
-  function readAgentMessageDelta(notification: RpcNotification): { messageId: string; delta: string } | null {
+  function readAgentMessageDelta(notification: RpcNotification): { messageId: string; delta: string; startOffset: number | null } | null {
     const params = asRecord(notification.params)
     if (!params) return null
 
@@ -2804,7 +2776,7 @@ export function useDesktopState() {
       const messageId = readString(params.itemId)
       const delta = readString(params.delta)
       if (!messageId || !delta) return null
-      return { messageId, delta }
+      return { messageId, delta, startOffset: typeof params.startOffset === 'number' ? params.startOffset : null }
     }
 
     return null
@@ -3151,30 +3123,52 @@ export function useDesktopState() {
       })
     }
 
-    if (!notificationThreadId || notificationThreadId !== selectedThreadId.value) return
+    if (!notificationThreadId) return
 
     const startedAgentMessageId = readAgentMessageStartedId(notification)
     if (startedAgentMessageId) {
-      activeReasoningItemId = ''
+      if (notificationThreadId === selectedThreadId.value) activeReasoningItemId = ''
+      const params = asRecord(notification.params)
+      upsertLiveAgentMessage(notificationThreadId, {
+        id: startedAgentMessageId, role: 'assistant', messageType: 'agentMessage.live',
+        text: readString(asRecord(params?.item)?.text),
+        turnId: readString(params?.turnId) || activeTurnIdByThreadId.value[notificationThreadId],
+      })
     }
 
     const liveAgentMessageDelta = readAgentMessageDelta(notification)
     if (liveAgentMessageDelta) {
       const existing = (liveAgentMessagesByThreadId.value[notificationThreadId] ?? [])
         .find((message) => message.id === liveAgentMessageDelta.messageId)
-      const nextText = `${existing?.text ?? ''}${liveAgentMessageDelta.delta}`
-      upsertLiveAgentMessage(notificationThreadId, {
+      const persisted = (persistedMessagesByThreadId.value[notificationThreadId] ?? [])
+        .find((message) => message.id === liveAgentMessageDelta.messageId)
+      const base = (persisted?.text.length ?? 0) > (existing?.text.length ?? 0) ? persisted : existing
+      const baseText = base?.text ?? ''
+      const { delta, startOffset } = liveAgentMessageDelta
+      // RPC snapshots can already contain this delta. Server offsets let us
+      // merge the two transports without appending the same text twice.
+      const nextText = startOffset === null ? `${existing?.text ?? ''}${delta}`
+        : baseText.length < startOffset ? null
+        : baseText.length >= startOffset + delta.length ? baseText
+        : `${baseText.slice(0, startOffset)}${delta}`
+      if (nextText === null) queueEventDrivenSync({ ...notification, method: 'answer/sync' })
+      else upsertLiveAgentMessage(notificationThreadId, {
         id: liveAgentMessageDelta.messageId,
         role: 'assistant',
         text: nextText,
+        turnId: readString(asRecord(notification.params)?.turnId) || activeTurnIdByThreadId.value[notificationThreadId],
         messageType: 'agentMessage.live',
       })
     }
 
     const completedAgentMessage = readAgentMessageCompleted(notification)
     if (completedAgentMessage) {
-      upsertLiveAgentMessage(notificationThreadId, completedAgentMessage)
+      upsertLiveAgentMessage(notificationThreadId, { ...completedAgentMessage,
+        turnId: readString(asRecord(notification.params)?.turnId) || activeTurnIdByThreadId.value[notificationThreadId],
+      })
     }
+
+    if (notificationThreadId !== selectedThreadId.value) return
 
     const startedReasoningItemId = readReasoningStartedItemId(notification)
     if (startedReasoningItemId) {
@@ -3262,7 +3256,7 @@ export function useDesktopState() {
   }
 
   function queueEventDrivenSync(notification: RpcNotification): void {
-    if (notification.method === 'thread/tokenUsage/updated') return
+    if (notification.method === 'thread/tokenUsage/updated' || notification.method === 'item/agentMessage/delta') return
     if (notification.method === 'thread/goal/updated' || notification.method === 'thread/goal/cleared') return
 
     const threadId = extractThreadIdFromNotification(notification)
@@ -3425,6 +3419,11 @@ export function useDesktopState() {
 
   function applyHistoryPage(threadId: string, page: ThreadHistoryPage, older: boolean): void {
     const previous = persistedMessagesByThreadId.value[threadId] ?? []
+    for (const message of page.messages) {
+      if (message.messageType !== 'turnSummary' || !message.turnId) continue
+      const prior = previous.find((row) => row.id === message.id)
+      if (message.text === 'Working…' || prior?.text !== message.text) invalidateTurnWork(threadId, message.turnId)
+    }
     const turnIds = orderedTurnIds(turnIndexByTurnIdByThreadId.value[threadId] ?? {})
     const merged = mergeThreadHistory(previous, turnIds, page, older)
     replaceTurnIndexLookupForThread(threadId, merged.turnIndexByTurnId)
@@ -3438,24 +3437,6 @@ export function useDesktopState() {
     replaceTurnIndexLookupForThread(threadId, page.turnIndexByTurnId)
     setPersistedMessagesForThread(threadId, page.messages)
     rebindLiveFileChangeTurnIndices(threadId)
-  }
-
-  async function recoverHistoryPage(threadId: string, page: ThreadHistoryPage): Promise<void> {
-    // Recover a turn's patches only once its earlier items have been loaded.
-    if (page.partialTurnId) return
-    const recovered = await recoverThreadPageFileChanges(threadId, page.messages, orderedTurnIds(page.turnIndexByTurnId))
-    const originalIds = new Set(page.messages.map((message) => message.id))
-    const extras = recovered.filter((message) => !originalIds.has(message.id))
-    if (extras.length === 0) return
-    const previous = persistedMessagesByThreadId.value[threadId] ?? []
-    const lookup = turnIndexByTurnIdByThreadId.value[threadId] ?? {}
-    const existingIds = new Set(previous.map((message) => message.id))
-    const existingChangeTurns = new Set(previous.filter((message) => message.messageType === 'fileChange').map((message) => message.turnId))
-    const next = [...previous, ...extras.filter((message) => message.turnId && lookup[message.turnId] !== undefined
-      && !existingIds.has(message.id) && !existingChangeTurns.has(message.turnId))
-      .map((message) => ({ ...message, turnIndex: lookup[message.turnId!] }))]
-      .sort((a, b) => (a.turnIndex ?? Infinity) - (b.turnIndex ?? Infinity))
-    setPersistedMessagesForThread(threadId, next)
   }
 
   async function loadRecentMessages(threadId: string, options: { silent?: boolean }, token: symbol) {
@@ -3485,7 +3466,7 @@ export function useDesktopState() {
         const older = await getThreadDetail(threadId, page.nextCursor)
         if (older.nextCursor === page.nextCursor) throw new Error('Conversation history cursor did not advance')
         const merged = mergeThreadHistory(page.messages, orderedTurnIds(page.turnIndexByTurnId), older, true)
-        page = { ...page, ...merged, nextCursor: older.nextCursor, partialTurnId: older.partialTurnId }
+        page = { ...page, ...merged, nextCursor: older.nextCursor }
       }
       if (historyRequestTokens.get(threadId) !== token) return
       const overlaps = Object.keys(page.turnIndexByTurnId).some((id) => existingIds.has(id))
@@ -3502,7 +3483,6 @@ export function useDesktopState() {
         setThreadScrollState(threadId, { scrollTop: 0, isAtBottom: true, scrollRatio: 1 })
       }
       const nextMessages = page.messages
-      void recoverHistoryPage(threadId, page)
 
       const previousLiveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
       const nextLiveAgent = removeRedundantLiveAgentMessages(previousLiveAgent, nextMessages)
@@ -3556,7 +3536,6 @@ export function useDesktopState() {
         if (page.nextCursor === cursor) throw new Error('Conversation history cursor did not advance')
         applyHistoryPage(threadId, page, true)
         historyCursorByThreadId.value[threadId] = page.nextCursor
-        void recoverHistoryPage(threadId, page)
       })()
       historyRequests.set(threadId, request)
       try {
@@ -4643,6 +4622,7 @@ export function useDesktopState() {
   }
 
   async function recoverBridgeState(): Promise<void> {
+    refreshOpenTurnWork()
     await loadPendingServerRequestsFromBridge()
     pendingThreadsRefresh = true
     if (selectedThreadId.value) {
@@ -4669,6 +4649,11 @@ export function useDesktopState() {
         if (hasLoadedThreads.value) void recoverBridgeState()
         return
       }
+      const params = asRecord(notification.params)
+      const threadId = extractThreadIdFromNotification(notification)
+      const turnId = readString(params?.turnId) || readString(asRecord(params?.turn)?.id)
+      if (threadId && turnId) invalidateTurnWork(threadId, turnId)
+      if (notification.method === 'turn/work/updated') return
       applyRealtimeUpdates(notification)
       queueEventDrivenSync(notification)
     })
@@ -4701,6 +4686,7 @@ export function useDesktopState() {
   }
 
   function stopPolling(): void {
+    clearTurnWorkCache()
     if (stopNotificationStream) {
       stopNotificationStream()
       stopNotificationStream = null

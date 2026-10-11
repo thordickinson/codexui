@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { writeFile } from 'node:fs/promises'
+import { createConversationNotifications } from './conversationNotifications.js'
 import { handleAccountRoutes } from './accountRoutes.js'
 import { handleAutomationRoutes } from './automationRoutes.js'
 import { handleReviewRoutes } from './reviewGit.js'
@@ -1666,7 +1667,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        const result = await appServer.rpc(body.method, body.params ?? null)
+        let result = await appServer.rpc(body.method, body.params ?? null)
+        // Rollback has no excludeTurns option. The browser reloads summaries
+        // after this mutation instead of downloading the full history here.
+        if (body.method === 'thread/rollback') {
+          const payload = asRecord(result)
+          const thread = asRecord(payload?.thread)
+          if (payload && thread) result = { ...payload, thread: { ...thread, turns: [] } }
+        }
         setJson(res, 200, { result })
         return
       }
@@ -2131,18 +2139,25 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     }
   }
 
+  // Keep item classification alive across browser reconnects, including while
+  // no browser is attached, so an already-streaming answer stays visible.
+  const conversationListeners = new Set<(value: { method: string; params: unknown; atIso: string }) => void>()
+  const projection = createConversationNotifications((notification) => {
+    for (const listener of conversationListeners) listener(notification)
+  })
+  const unsubscribeProjection = appServer.onNotification(projection.accept)
   middleware.dispose = () => {
+    unsubscribeProjection()
+    projection.dispose()
+    conversationListeners.clear()
     appServer.dispose()
   }
   middleware.subscribeNotifications = (
     listener: (value: { method: string; params: unknown; atIso: string }) => void,
   ) => {
-    return appServer.onNotification((notification: { method: string; params: unknown }) => {
-      listener({
-        ...notification,
-        atIso: new Date().toISOString(),
-      })
-    })
+    conversationListeners.add(listener)
+    projection.replay(listener)
+    return () => { conversationListeners.delete(listener) }
   }
 
   return middleware

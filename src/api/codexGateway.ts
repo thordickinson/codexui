@@ -27,6 +27,7 @@ import {
   normalizeThreadGroupsV2,
   normalizeThreadMessagesV2,
   normalizeTurnMessagesV2,
+  normalizeTurnSummariesV2,
   readThreadInProgressFromResponse,
   readThreadInProgressFromTurns,
 } from './normalizers/v2'
@@ -707,80 +708,33 @@ export type ThreadHistoryPage = {
   inProgress: boolean
   turnIndexByTurnId: ThreadTurnIndexById
   nextCursor: string | null
-  // The oldest turn in this page may have earlier items still unloaded.
-  partialTurnId?: string
-}
-
-type ThreadHistoryCursor = {
-  turnCursor: string | null
-  turnId: string | null
-  itemCursor: string | null
-}
-
-function encodeHistoryCursor(value: ThreadHistoryCursor): string | null {
-  return value.itemCursor || value.turnCursor ? JSON.stringify(value) : null
-}
-
-function decodeHistoryCursor(cursor: string | null): ThreadHistoryCursor {
-  if (!cursor) return { turnCursor: null, turnId: null, itemCursor: null }
-  const value = JSON.parse(cursor) as ThreadHistoryCursor
-  if (!value || !['turnCursor', 'turnId', 'itemCursor'].every((key) => {
-    const field = value[key as keyof ThreadHistoryCursor]
-    return field === null || typeof field === 'string'
-  }) || (value.itemCursor && !value.turnId)) throw new Error('Invalid conversation history cursor')
-  return value
 }
 
 async function getThreadDetailV2(threadId: string, cursor: string | null): Promise<ThreadHistoryPage> {
-  const position = decodeHistoryCursor(cursor)
-  try {
-    let turn: Turn | undefined
-    let turnCursor = position.turnCursor
-    if (position.turnId && position.itemCursor) {
-      // Only older-page requests take this branch; their status must not
-      // replace the status obtained from the newest turn.
-      turn = { id: position.turnId, items: [], itemsView: 'notLoaded', status: 'completed', error: null,
-        startedAt: null, completedAt: null, durationMs: null }
-    } else {
-      const payload = await callRpc<ThreadTurnsListResponse>('thread/turns/list', {
-        threadId,
-        cursor: turnCursor,
-        limit: 1,
-        sortDirection: 'desc',
-        itemsView: 'summary',
-      })
-      turn = payload.data?.[0]
-      turnCursor = payload.nextCursor || null
-    }
-    if (!turn) return { messages: [], inProgress: false, turnIndexByTurnId: {}, nextCursor: null }
+  // Summary pages already contain the user prompts and final response text.
+  // Never hydrate tool items or fall back to a full-thread read here.
+  const payload = await callRpc<ThreadTurnsListResponse>('thread/turns/list', {
+    threadId,
+    cursor,
+    limit: 10,
+    sortDirection: 'desc',
+    itemsView: 'summary',
+  })
+  const turns = [...(payload.data ?? [])].reverse()
+  return {
+    messages: normalizeTurnSummariesV2(turns),
+    inProgress: readThreadInProgressFromTurns(turns),
+    turnIndexByTurnId: buildTurnIndexByTurnId(turns),
+    nextCursor: payload.nextCursor || null,
+  }
+}
 
-    // A turn can contain thousands of tool calls. Bound the item count too.
-    const payload = await callThreadItemsList(threadId, turn.id, position.itemCursor, { limit: 40, sortDirection: 'desc' })
-    const items = (payload.data ?? []).map(readThreadItemPageEntry)
-      .filter((item): item is Turn['items'][number] => item !== null).reverse()
-    const turns: Turn[] = [{ ...turn, items, itemsView: 'full' }]
-    return {
-      messages: normalizeTurnMessagesV2(turns),
-      inProgress: readThreadInProgressFromTurns(turns),
-      turnIndexByTurnId: buildTurnIndexByTurnId(turns),
-      nextCursor: encodeHistoryCursor({ turnCursor, turnId: turn.id, itemCursor: payload.nextCursor || null }),
-      partialTurnId: payload.nextCursor ? turn.id : undefined,
-    }
-  } catch (error) {
-    // Do not turn a transient page failure into an expensive full-thread read.
-    const message = error instanceof Error ? error.message.toLowerCase() : ''
-    if (cursor || !/method not found|unknown method|not supported/u.test(message)) throw error
-    const payload = await callRpc<ThreadReadResponse>('thread/read', {
-      threadId,
-      includeTurns: true,
-    })
-    const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : []
-    return {
-      messages: normalizeThreadMessagesV2(payload),
-      inProgress: readThreadInProgressFromResponse(payload),
-      turnIndexByTurnId: buildTurnIndexByTurnId(turns),
-      nextCursor: null,
-    }
+export async function getTurnWorkPage(threadId: string, turnId: string, cursor: string | null = null) {
+  const payload = await callThreadItemsList(threadId, turnId, cursor, { limit: 40, sortDirection: 'desc' })
+  return {
+    items: (payload.data ?? []).map(readThreadItemPageEntry)
+      .filter((item): item is Turn['items'][number] => item !== null).reverse(),
+    nextCursor: payload.nextCursor || null,
   }
 }
 
@@ -804,7 +758,7 @@ export async function getThreadDetail(threadId: string, cursor: string | null = 
   try {
     return await getThreadDetailV2(threadId, cursor)
   } catch (error) {
-    throw normalizeCodexApiError(error, `Failed to load thread ${threadId}`, 'thread/read')
+    throw normalizeCodexApiError(error, `Failed to load thread ${threadId}`, 'thread/turns/list')
   }
 }
 
@@ -1210,7 +1164,7 @@ export async function removeAccount(accountId: string): Promise<AccountsListResu
 }
 
 export async function resumeThread(threadId: string): Promise<void> {
-  await callRpc('thread/resume', { threadId })
+  await callRpc('thread/resume', { threadId, excludeTurns: true })
 }
 
 export async function archiveThread(threadId: string): Promise<void> {
@@ -1289,13 +1243,8 @@ export async function clearThreadGoal(threadId: string): Promise<boolean> {
 }
 
 export async function rollbackThread(threadId: string, numTurns: number): Promise<ThreadHistoryPage> {
-  const payload = await callRpc<ThreadReadResponse>('thread/rollback', { threadId, numTurns })
-  return {
-    messages: normalizeThreadMessagesV2(payload),
-    turnIndexByTurnId: buildTurnIndexByTurnId(payload.thread.turns ?? []),
-    nextCursor: null,
-    inProgress: readThreadInProgressFromResponse(payload),
-  }
+  await callRpc('thread/rollback', { threadId, numTurns })
+  return getThreadDetail(threadId)
 }
 
 function normalizeThreadIdFromPayload(payload: unknown): string {
@@ -1348,7 +1297,7 @@ export async function startThread(cwd?: string, model?: string): Promise<string>
 
 export async function forkThread(threadId: string): Promise<ThreadHistoryPage & { threadId: string; cwd: string }> {
   try {
-    const payload = await callRpc<ThreadReadResponse & { thread?: { id?: string; cwd?: string } }>('thread/fork', { threadId })
+    const payload = await callRpc<ThreadReadResponse & { thread?: { id?: string; cwd?: string } }>('thread/fork', { threadId, excludeTurns: true })
     const forkedThreadId = normalizeThreadIdFromPayload(payload)
     if (!forkedThreadId) {
       throw new Error('thread/fork did not return a thread id')
@@ -1356,10 +1305,7 @@ export async function forkThread(threadId: string): Promise<ThreadHistoryPage & 
     return {
       threadId: forkedThreadId,
       cwd: normalizeThreadCwdFromPayload(payload),
-      messages: normalizeThreadMessagesV2(payload),
-      turnIndexByTurnId: buildTurnIndexByTurnId(payload.thread.turns ?? []),
-      nextCursor: null,
-      inProgress: readThreadInProgressFromResponse(payload),
+      ...await getThreadDetail(forkedThreadId),
     }
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to fork thread ${threadId}`, 'thread/fork')

@@ -24,13 +24,10 @@ export function mergeThreadHistory(
   const lookup = Object.fromEntries(ids.map((id, index) => [id, index]))
   const replacedTurns = new Set(pageIds)
   const currentById = new Map(messages.map((message) => [message.id, message]))
-  const incomingIds = new Set(page.messages.map((message) => message.id))
-  const firstMessageOverlap = messages.findIndex((message) => incomingIds.has(message.id))
   const combined = older
     ? [...page.messages.filter((message) => !currentById.has(message.id)), ...messages]
-    : [...messages.filter((message, index) => !message.turnId || (lookup[message.turnId] !== undefined
-      && (!replacedTurns.has(message.turnId)
-        || (message.turnId === page.partialTurnId && firstMessageOverlap >= 0 && index < firstMessageOverlap)))), ...page.messages]
+    : [...messages.filter((message) => !message.turnId || (lookup[message.turnId] !== undefined
+      && !replacedTurns.has(message.turnId))), ...page.messages]
   const seen = new Set<string>()
   const merged = combined.filter((message) => {
     if (seen.has(message.id)) return false
