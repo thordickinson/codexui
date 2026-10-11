@@ -3699,16 +3699,21 @@ export function useDesktopState() {
     applyThreadFlags()
   }
 
-  async function archiveThreadById(threadId: string) {
+  async function archiveThreadById(threadId: string): Promise<string> {
     try {
       await archiveThread(threadId)
+      clearLocalThreadState(threadId)
       await loadThreads()
 
       if (selectedThreadId.value === threadId) {
-        await loadMessages(selectedThreadId.value)
+        setSelectedThreadId('')
       }
+      error.value = ''
+      return ''
     } catch (unknownError) {
-      error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      error.value = message
+      return message
     }
   }
 

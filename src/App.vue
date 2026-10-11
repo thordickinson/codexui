@@ -84,7 +84,7 @@
             :project-git-error-by-id="projectGitErrorById"
             :project-git-action-by-id="projectGitActionById"
             @select="onSelectThread"
-            @archive="onArchiveThread" @delete="onDeleteThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
+            @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
             @browse-project-files="onBrowseProjectFiles"
             @open-project-git-menu="onOpenProjectGitMenu"
             @switch-project-branch="onSwitchProjectBranch"
@@ -488,7 +488,6 @@ const {
   loadOlderMessages,
   setThreadScrollState,
   archiveThreadById,
-  deleteThreadById,
   renameThreadById,
   forkThreadFromTurn,
   sendMessageToSelectedThread,
@@ -1100,20 +1099,9 @@ async function onRemoveAccount(accountId: string): Promise<void> {
   }
 }
 
-function onArchiveThread(threadId: string): void {
-  void archiveThreadById(threadId)
-}
-
-function formatDeleteThreadError(message: string): string {
-  if (message.toLowerCase().includes('already has an active writer')) {
-    return 'This thread is active in another Codex client. Stop its running turn or close that client, then try again.'
-  }
-  return message || 'Failed to delete thread.'
-}
-
-async function onDeleteThread(payload: { threadId: string; complete: (errorMessage?: string) => void }): Promise<void> {
-  const errorMessage = await deleteThreadById(payload.threadId)
-  payload.complete(errorMessage ? formatDeleteThreadError(errorMessage) : undefined)
+async function onArchiveThread(payload: { threadId: string; complete: (errorMessage?: string) => void }): Promise<void> {
+  const errorMessage = await archiveThreadById(payload.threadId)
+  payload.complete(errorMessage || undefined)
 }
 
 function onStartNewThread(projectName: string): void {

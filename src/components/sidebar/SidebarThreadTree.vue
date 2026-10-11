@@ -559,8 +559,8 @@
         <button class="thread-menu-item" type="button" @click="openRenameThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
           Rename thread
         </button>
-        <button class="thread-menu-item thread-menu-item-danger" type="button" @click="openDeleteThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
-          Delete thread
+        <button class="thread-menu-item" type="button" @click="openArchiveThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
+          Archive thread
         </button>
       </div>
     </Teleport>
@@ -592,17 +592,17 @@
     </Teleport>
 
     <Teleport to="body">
-      <div v-if="deleteThreadDialogVisible" class="rename-thread-overlay" @click.self="closeDeleteThreadDialog">
-        <div class="rename-thread-panel" role="dialog" aria-modal="true" aria-label="Delete thread">
-          <h3 class="rename-thread-title">Delete thread?</h3>
+      <div v-if="archiveThreadDialogVisible" class="rename-thread-overlay" @click.self="closeArchiveThreadDialog">
+        <div class="rename-thread-panel" role="dialog" aria-modal="true" aria-label="Archive thread">
+          <h3 class="rename-thread-title">Archive thread?</h3>
           <p class="rename-thread-subtitle">
-            This permanently deletes "{{ deleteThreadTitle }}" and any spawned child threads.
+            This hides "{{ archiveThreadTitle }}" from the sidebar. You can restore it later.
           </p>
-          <p v-if="deleteThreadError" class="rename-thread-error" role="alert">{{ deleteThreadError }}</p>
+          <p v-if="archiveThreadError" class="rename-thread-error" role="alert">{{ archiveThreadError }}</p>
           <div class="rename-thread-actions">
-            <button class="rename-thread-button" type="button" :disabled="deleteThreadPending" @click="closeDeleteThreadDialog">Cancel</button>
-            <button class="rename-thread-button rename-thread-button-danger" type="button" :disabled="deleteThreadPending" @click="submitDeleteThread">
-              {{ deleteThreadPending ? 'Deleting…' : 'Delete' }}
+            <button class="rename-thread-button" type="button" :disabled="archiveThreadPending" @click="closeArchiveThreadDialog">Cancel</button>
+            <button class="rename-thread-button rename-thread-button-primary" type="button" :disabled="archiveThreadPending" @click="submitArchiveThread">
+              {{ archiveThreadPending ? 'Archiving…' : 'Archive' }}
             </button>
           </div>
         </div>
@@ -647,8 +647,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [threadId: string]
-  archive: [threadId: string]
-  delete: [payload: { threadId: string; complete: (errorMessage?: string) => void }]
+  archive: [payload: { threadId: string; complete: (errorMessage?: string) => void }]
   'start-new-thread': [projectName: string]
   'browse-project-files': [projectName: string]
   'open-project-git-menu': [projectName: string]
@@ -712,11 +711,11 @@ const renameThreadDraft = ref('')
 const renameThreadPending = ref(false)
 const renameThreadError = ref('')
 const renameThreadInputRef = ref<HTMLInputElement | null>(null)
-const deleteThreadDialogVisible = ref(false)
-const deleteThreadDialogThreadId = ref('')
-const deleteThreadTitle = ref('')
-const deleteThreadPending = ref(false)
-const deleteThreadError = ref('')
+const archiveThreadDialogVisible = ref(false)
+const archiveThreadDialogThreadId = ref('')
+const archiveThreadTitle = ref('')
+const archiveThreadPending = ref(false)
+const archiveThreadError = ref('')
 const groupsContainerRef = ref<HTMLElement | null>(null)
 const pendingProjectDrag = ref<PendingProjectDrag | null>(null)
 const activeProjectDrag = ref<ActiveProjectDrag | null>(null)
@@ -1181,39 +1180,39 @@ function submitRenameThread(): void {
   })
 }
 
-function openDeleteThreadDialog(threadId: string, currentTitle: string): void {
-  deleteThreadDialogThreadId.value = threadId
-  deleteThreadTitle.value = currentTitle
-  deleteThreadPending.value = false
-  deleteThreadError.value = ''
-  deleteThreadDialogVisible.value = true
+function openArchiveThreadDialog(threadId: string, currentTitle: string): void {
+  archiveThreadDialogThreadId.value = threadId
+  archiveThreadTitle.value = currentTitle
+  archiveThreadPending.value = false
+  archiveThreadError.value = ''
+  archiveThreadDialogVisible.value = true
   closeThreadMenu()
 }
 
-function closeDeleteThreadDialog(): void {
-  if (deleteThreadPending.value) return
-  deleteThreadDialogVisible.value = false
-  deleteThreadDialogThreadId.value = ''
-  deleteThreadTitle.value = ''
-  deleteThreadError.value = ''
+function closeArchiveThreadDialog(): void {
+  if (archiveThreadPending.value) return
+  archiveThreadDialogVisible.value = false
+  archiveThreadDialogThreadId.value = ''
+  archiveThreadTitle.value = ''
+  archiveThreadError.value = ''
 }
 
-function submitDeleteThread(): void {
-  const threadId = deleteThreadDialogThreadId.value
-  if (!threadId || deleteThreadPending.value) return
-  deleteThreadPending.value = true
-  deleteThreadError.value = ''
-  emit('delete', {
+function submitArchiveThread(): void {
+  const threadId = archiveThreadDialogThreadId.value
+  if (!threadId || archiveThreadPending.value) return
+  archiveThreadPending.value = true
+  archiveThreadError.value = ''
+  emit('archive', {
     threadId,
     complete: (errorMessage?: string) => {
-      if (deleteThreadDialogThreadId.value !== threadId) return
-      deleteThreadPending.value = false
+      if (archiveThreadDialogThreadId.value !== threadId) return
+      archiveThreadPending.value = false
       if (errorMessage) {
-        deleteThreadError.value = errorMessage
+        archiveThreadError.value = errorMessage
         return
       }
       pinnedThreadIds.value = pinnedThreadIds.value.filter((id) => id !== threadId)
-      closeDeleteThreadDialog()
+      closeArchiveThreadDialog()
     },
   })
 }
