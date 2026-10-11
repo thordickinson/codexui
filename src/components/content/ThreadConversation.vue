@@ -3,17 +3,26 @@
     <p v-if="isLoading" class="conversation-loading">Loading messages...</p>
 
     <p
-      v-else-if="messages.length === 0 && pendingRequests.length === 0 && !liveOverlay"
+      v-else-if="messages.length === 0 && pendingRequests.length === 0 && !liveOverlay && !hasOlderMessages"
       class="conversation-empty"
     >
       No messages in this thread yet.
     </p>
 
-    <ul v-else ref="conversationListRef" class="conversation-list" @scroll="onConversationScroll">
+    <ul v-else ref="conversationListRef" class="conversation-list" @scroll="onConversationScroll"
+      @wheel.passive="onHistoryWheel" @touchstart.passive="onHistoryTouchStart" @touchmove.passive="onHistoryTouchMove">
+      <li v-if="hasOlderMessages || isLoadingOlderMessages" class="conversation-history-control">
+        <span v-if="isLoadingOlderMessages" role="status">Loading older messages...</span>
+        <template v-else>
+          <span v-if="olderMessagesError" role="alert">{{ olderMessagesError }}</span>
+          <button type="button" @click="requestOlderMessages">{{ olderMessagesError ? 'Retry loading older messages' : 'Load older messages' }}</button>
+        </template>
+      </li>
       <template v-for="message in messages" :key="message.id">
       <li
         v-if="!hiddenGroupedCommandIds.has(message.id) && !hiddenFileChangeMessageIds.has(message.id)"
         class="conversation-item"
+        :data-message-id="message.id"
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
       >
@@ -1231,12 +1240,16 @@ const props = defineProps<{
   pendingRequests: UiServerRequest[]
   liveOverlay: UiLiveOverlay | null
   isLoading: boolean
+  hasOlderMessages: boolean
+  isLoadingOlderMessages: boolean
+  olderMessagesError: string
   activeThreadId: string
   cwd: string
   scrollState: ThreadScrollState | null
 }>()
 
 const emit = defineEmits<{
+  loadOlderMessages: [threadId: string]
   updateScrollState: [payload: { threadId: string; state: ThreadScrollState }]
   forkThread: [payload: { threadId: string; turnIndex: number }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
@@ -1297,6 +1310,12 @@ type MessageBlock =
   | { kind: 'image'; url: string; alt: string; markdown: string }
 
 let scrollRestoreFrame = 0
+let previousScrollTop = 0
+let historyTouchY = 0
+let restoringHistory = false
+let historyRequestPending = false
+let historyAnchor: { threadId: string; element: HTMLElement | null; top: number; scrollTop: number; height: number } | null = null
+const HISTORY_THRESHOLD_PX = 160
 let bottomLockFrame = 0
 let bottomLockFramesLeft = 0
 let copiedMessageResetTimer: ReturnType<typeof setTimeout> | null = null
@@ -3532,12 +3551,15 @@ function bindPendingImageHandlers(): void {
 
 async function scheduleScrollRestore(): Promise<void> {
   await nextTick()
+  if (restoringHistory || historyAnchor) return
   if (scrollRestoreFrame) {
     cancelAnimationFrame(scrollRestoreFrame)
   }
   scrollRestoreFrame = requestAnimationFrame(() => {
     scrollRestoreFrame = 0
+    if (restoringHistory || historyAnchor) return
     applySavedScrollState()
+    previousScrollTop = conversationListRef.value?.scrollTop ?? 0
     bindPendingImageHandlers()
     scheduleBottomLock()
   })
@@ -3547,6 +3569,9 @@ watch(
   () => props.messages,
   async (next) => {
     if (props.isLoading) return
+    if (historyAnchor && historyAnchor.threadId === props.activeThreadId) {
+      captureHistoryAnchor()
+    }
 
     const commandIds = new Set(
       next
@@ -3623,6 +3648,10 @@ watch(
 watch(
   () => props.activeThreadId,
   () => {
+    historyAnchor = null
+    historyRequestPending = false
+    restoringHistory = false
+    previousScrollTop = 0
     autoFollowOutput.value = props.scrollState?.isAtBottom !== false
     modalImageUrl.value = ''
     failedMarkdownImageKeys.value = new Set()
@@ -3639,10 +3668,87 @@ watch(
 
 function onConversationScroll(): void {
   const container = conversationListRef.value
-  if (!container || props.isLoading) return
+  if (!container || props.isLoading || restoringHistory) return
+  const scrollingUp = container.scrollTop < previousScrollTop
+  previousScrollTop = container.scrollTop
   autoFollowOutput.value = isAtBottom(container)
   emitScrollState(container)
+  if (scrollingUp && container.scrollTop <= HISTORY_THRESHOLD_PX && !props.olderMessagesError) {
+    requestOlderMessages()
+  }
 }
+
+function onHistoryWheel(event: WheelEvent): void {
+  if (event.deltaY < 0 && !props.olderMessagesError && (conversationListRef.value?.scrollTop ?? Infinity) <= HISTORY_THRESHOLD_PX) {
+    requestOlderMessages()
+  }
+}
+
+function onHistoryTouchStart(event: TouchEvent): void {
+  historyTouchY = event.touches[0]?.clientY ?? 0
+}
+
+function onHistoryTouchMove(event: TouchEvent): void {
+  const nextY = event.touches[0]?.clientY ?? historyTouchY
+  if (nextY > historyTouchY && !props.olderMessagesError && (conversationListRef.value?.scrollTop ?? Infinity) <= HISTORY_THRESHOLD_PX) {
+    requestOlderMessages()
+  }
+  historyTouchY = nextY
+}
+
+function requestOlderMessages(): void {
+  const container = conversationListRef.value
+  if (!container || props.isLoading || props.isLoadingOlderMessages || historyRequestPending || !props.hasOlderMessages) return
+  historyRequestPending = true
+  autoFollowOutput.value = false
+  captureHistoryAnchor()
+  emit('loadOlderMessages', props.activeThreadId)
+}
+
+function captureHistoryAnchor(): void {
+  const container = conversationListRef.value
+  if (!container) return
+  const top = container.getBoundingClientRect().top
+  const element = Array.from(container.querySelectorAll<HTMLElement>('[data-message-id]'))
+    .find((item) => item.getBoundingClientRect().bottom > top) ?? null
+  historyAnchor = {
+    threadId: props.activeThreadId,
+    element,
+    top: element?.getBoundingClientRect().top ?? top,
+    scrollTop: container.scrollTop,
+    height: container.scrollHeight,
+  }
+}
+
+watch(
+  () => props.isLoadingOlderMessages,
+  async (loading) => {
+    if (loading) return
+    // Capture even on failure: the reader may have moved while waiting,
+    // and the loading/error control can change height without new messages.
+    if (historyAnchor?.threadId === props.activeThreadId) captureHistoryAnchor()
+    const anchor = historyAnchor
+    historyAnchor = null
+    historyRequestPending = false
+    if (!anchor || anchor.threadId !== props.activeThreadId) return
+    restoringHistory = true
+    await nextTick()
+    const container = conversationListRef.value
+    if (container && anchor.threadId === props.activeThreadId) {
+      if (autoFollowOutput.value) {
+        scrollToBottom()
+      } else if (anchor.element?.isConnected) {
+        container.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top
+      } else {
+        container.scrollTop = anchor.scrollTop + container.scrollHeight - anchor.height
+      }
+      previousScrollTop = container.scrollTop
+      autoFollowOutput.value = isAtBottom(container)
+      emitScrollState(container)
+    }
+    restoringHistory = false
+  },
+)
 
 function openImageModal(imageUrl: string): void {
   modalImageUrl.value = toRenderableImageUrl(imageUrl)
@@ -3711,6 +3817,14 @@ onBeforeUnmount(() => {
 
 .conversation-list {
   @apply h-full min-h-0 min-w-0 list-none m-0 px-2 sm:px-6 py-0 overflow-y-auto overflow-x-hidden flex flex-col gap-2 sm:gap-3;
+}
+
+.conversation-history-control {
+  @apply shrink-0 flex flex-col items-center gap-1 py-3 text-sm text-slate-500;
+}
+
+.conversation-history-control button {
+  @apply cursor-pointer rounded px-3 py-1 text-slate-600 hover:bg-slate-100;
 }
 
 .conversation-item {

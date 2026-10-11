@@ -415,8 +415,10 @@ function buildTurnIndexByTurnId(turns: Turn[]): ThreadTurnIndexById {
   return lookup
 }
 
-async function fetchThreadFileChangeFallback(threadId: string): Promise<ThreadFileChangeFallbackEntry[]> {
-  const response = await fetch(`/codex-api/thread-file-change-fallback?threadId=${encodeURIComponent(threadId)}`)
+async function fetchThreadFileChangeFallback(threadId: string, turnIds?: string[]): Promise<ThreadFileChangeFallbackEntry[]> {
+  const params = new URLSearchParams({ threadId })
+  for (const turnId of turnIds ?? []) params.append('turnId', turnId)
+  const response = await fetch(`/codex-api/thread-file-change-fallback?${params}`)
   if (!response.ok) {
     throw new Error(`Fallback request failed with ${response.status}`)
   }
@@ -490,6 +492,20 @@ async function enrichThreadMessagesWithFallback(threadId: string, messages: UiMe
   try {
     const fallbackEntries = await fetchThreadFileChangeFallback(threadId)
     return mergeRecoveredFileChangeMessages(messages, fallbackEntries)
+  } catch {
+    return messages
+  }
+}
+
+// Recovery runs after the page is visible and only adds changes to its turns.
+export async function recoverThreadPageFileChanges(threadId: string, messages: UiMessage[], turnIds: string[]): Promise<UiMessage[]> {
+  if (turnIds.length === 0) return messages
+  try {
+    const lookup = new Map(turnIds.map((id, index) => [id, index]))
+    const entries = (await fetchThreadFileChangeFallback(threadId, turnIds))
+      .filter((entry) => lookup.has(entry.turnId))
+      .map((entry) => ({ ...entry, turnIndex: lookup.get(entry.turnId)! }))
+    return mergeRecoveredFileChangeMessages(messages, entries)
   } catch {
     return messages
   }
@@ -683,30 +699,47 @@ async function getThreadMessagesV2(threadId: string): Promise<UiMessage[]> {
   }
 }
 
-async function getThreadDetailV2(threadId: string): Promise<{
+export type ThreadHistoryPage = {
   messages: UiMessage[]
   inProgress: boolean
   turnIndexByTurnId: ThreadTurnIndexById
-}> {
+  nextCursor: string | null
+}
+
+async function getThreadDetailV2(threadId: string, cursor: string | null): Promise<ThreadHistoryPage> {
   try {
-    const turns = await listThreadTurns(threadId)
-    const messages = await enrichThreadMessagesWithFallback(threadId, normalizeTurnMessagesV2(turns))
+    const payload = await callRpc<ThreadTurnsListResponse>('thread/turns/list', {
+      threadId,
+      cursor,
+      limit: 10,
+      sortDirection: 'desc',
+      itemsView: 'full',
+    })
+    const turns = [...(Array.isArray(payload.data) ? payload.data : [])].reverse()
+    const hydratedTurns = await Promise.all(turns.map(async (turn) => {
+      if (turn.itemsView === 'full') return turn
+      return { ...turn, items: await listThreadTurnItems(threadId, turn.id), itemsView: 'full' as const }
+    }))
     return {
-      messages,
+      messages: normalizeTurnMessagesV2(hydratedTurns),
       inProgress: readThreadInProgressFromTurns(turns),
       turnIndexByTurnId: buildTurnIndexByTurnId(turns),
+      nextCursor: payload.nextCursor || null,
     }
-  } catch {
+  } catch (error) {
+    // Do not turn a transient page failure into an expensive full-thread read.
+    const message = error instanceof Error ? error.message.toLowerCase() : ''
+    if (cursor || !/method not found|unknown method|not supported/u.test(message)) throw error
     const payload = await callRpc<ThreadReadResponse>('thread/read', {
       threadId,
       includeTurns: true,
     })
     const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : []
-    const messages = await enrichThreadMessagesWithFallback(threadId, normalizeThreadMessagesV2(payload))
     return {
-      messages,
+      messages: normalizeThreadMessagesV2(payload),
       inProgress: readThreadInProgressFromResponse(payload),
       turnIndexByTurnId: buildTurnIndexByTurnId(turns),
+      nextCursor: null,
     }
   }
 }
@@ -727,13 +760,9 @@ export async function getThreadMessages(threadId: string): Promise<UiMessage[]> 
   }
 }
 
-export async function getThreadDetail(threadId: string): Promise<{
-  messages: UiMessage[]
-  inProgress: boolean
-  turnIndexByTurnId: ThreadTurnIndexById
-}> {
+export async function getThreadDetail(threadId: string, cursor: string | null = null): Promise<ThreadHistoryPage> {
   try {
-    return await getThreadDetailV2(threadId)
+    return await getThreadDetailV2(threadId, cursor)
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to load thread ${threadId}`, 'thread/read')
   }
@@ -1219,9 +1248,14 @@ export async function clearThreadGoal(threadId: string): Promise<boolean> {
   }
 }
 
-export async function rollbackThread(threadId: string, numTurns: number): Promise<UiMessage[]> {
+export async function rollbackThread(threadId: string, numTurns: number): Promise<ThreadHistoryPage> {
   const payload = await callRpc<ThreadReadResponse>('thread/rollback', { threadId, numTurns })
-  return normalizeThreadMessagesV2(payload)
+  return {
+    messages: normalizeThreadMessagesV2(payload),
+    turnIndexByTurnId: buildTurnIndexByTurnId(payload.thread.turns ?? []),
+    nextCursor: null,
+    inProgress: readThreadInProgressFromResponse(payload),
+  }
 }
 
 function normalizeThreadIdFromPayload(payload: unknown): string {
@@ -1272,7 +1306,7 @@ export async function startThread(cwd?: string, model?: string): Promise<string>
   }
 }
 
-export async function forkThread(threadId: string): Promise<{ threadId: string; cwd: string; messages: UiMessage[] }> {
+export async function forkThread(threadId: string): Promise<ThreadHistoryPage & { threadId: string; cwd: string }> {
   try {
     const payload = await callRpc<ThreadReadResponse & { thread?: { id?: string; cwd?: string } }>('thread/fork', { threadId })
     const forkedThreadId = normalizeThreadIdFromPayload(payload)
@@ -1283,6 +1317,9 @@ export async function forkThread(threadId: string): Promise<{ threadId: string; 
       threadId: forkedThreadId,
       cwd: normalizeThreadCwdFromPayload(payload),
       messages: normalizeThreadMessagesV2(payload),
+      turnIndexByTurnId: buildTurnIndexByTurnId(payload.thread.turns ?? []),
+      nextCursor: null,
+      inProgress: readThreadInProgressFromResponse(payload),
     }
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to fork thread ${threadId}`, 'thread/fork')

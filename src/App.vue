@@ -329,7 +329,11 @@
                   <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
                     :active-thread-id="composerThreadContextId" :cwd="composerCwd" :scroll-state="selectedThreadScrollState"
                     :live-overlay="liveOverlay"
+                    :has-older-messages="selectedThreadHasOlderMessages"
+                    :is-loading-older-messages="isLoadingOlderMessages"
+                    :older-messages-error="olderMessagesError"
                     :pending-requests="selectedThreadServerRequests"
+                    @load-older-messages="loadOlderMessages"
                     @update-scroll-state="onUpdateThreadScrollState"
                     @fork-thread="onForkThreadFromMessage"
                     @respond-server-request="onRespondServerRequest" />
@@ -447,6 +451,9 @@ const {
   projectDisplayNameById,
   selectedThread,
   selectedThreadScrollState,
+  selectedThreadHasOlderMessages,
+  isLoadingOlderMessages,
+  olderMessagesError,
   selectedThreadServerRequests,
   selectedLiveOverlay,
   codexQuota,
@@ -478,6 +485,7 @@ const {
   consumeRateLimitResetCredit,
   selectThread,
   ensureThreadMessagesLoaded,
+  loadOlderMessages,
   setThreadScrollState,
   archiveThreadById,
   deleteThreadById,

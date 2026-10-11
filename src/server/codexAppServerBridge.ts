@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, mkdir, stat, cp, lstat, readlink, symlink } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { createReadStream, existsSync } from 'node:fs'
+import { createInterface } from 'node:readline'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { homedir } from 'node:os'
@@ -320,7 +321,7 @@ function parseApplyPatchInput(input: string): SessionRecoveredFileChange[] {
   return changes
 }
 
-function buildSessionFileChangeFallback(threadReadPayload: unknown, sessionLogRaw: string): SessionRecoveredTurnFileChanges[] {
+async function buildSessionFileChangeFallback(threadReadPayload: unknown, lines: AsyncIterable<string>): Promise<SessionRecoveredTurnFileChanges[]> {
   const payload = asRecord(threadReadPayload)
   const thread = asRecord(payload?.thread)
   const turns = Array.isArray(thread?.turns) ? thread.turns : []
@@ -337,8 +338,11 @@ function buildSessionFileChangeFallback(threadReadPayload: unknown, sessionLogRa
   const collectedByTurnId = new Map<string, SessionRecoveredFileChange[]>()
   let currentTurnId = ''
 
-  for (const line of sessionLogRaw.split('\n')) {
+  for await (const line of lines) {
     if (!line.trim()) continue
+    // Most rows are large message/tool payloads. Only parse context markers
+    // and possible patches for the requested turns.
+    if (!line.includes('"turn_context"') && (!turnIndexById.has(currentTurnId) || !line.includes('"apply_patch"'))) continue
     let row: Record<string, unknown> | null = null
     try {
       row = JSON.parse(line) as Record<string, unknown>
@@ -1678,6 +1682,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'GET' && url.pathname === '/codex-api/thread-file-change-fallback') {
         const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+        const turnIds = url.searchParams.getAll('turnId').filter(Boolean)
         if (!threadId) {
           setJson(res, 400, { error: 'Missing threadId' })
           return
@@ -1685,7 +1690,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
         const threadReadResult = await appServer.rpc('thread/read', {
           threadId,
-          includeTurns: true,
+          includeTurns: turnIds.length === 0,
         })
         const threadReadRecord = asRecord(threadReadResult)
         const threadRecord = asRecord(threadReadRecord?.thread)
@@ -1696,8 +1701,19 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
 
         try {
-          const sessionLogRaw = await readFile(sessionPath, 'utf8')
-          setJson(res, 200, { data: buildSessionFileChangeFallback(threadReadResult, sessionLogRaw) })
+          const stream = createReadStream(sessionPath, { encoding: 'utf8' })
+          const lines = createInterface({ input: stream, crlfDelay: Infinity })
+          // Forward file read failures to the async line iterator as well.
+          stream.on('error', (error) => lines.emit('error', error))
+          try {
+            const scopedThread = turnIds.length > 0
+              ? { thread: { turns: turnIds.map((id) => ({ id })) } }
+              : threadReadResult
+            setJson(res, 200, { data: await buildSessionFileChangeFallback(scopedThread, lines) })
+          } finally {
+            lines.close()
+            stream.destroy()
+          }
         } catch {
           setJson(res, 200, { data: [] })
         }

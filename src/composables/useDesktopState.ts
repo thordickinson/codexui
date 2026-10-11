@@ -16,6 +16,7 @@ import {
   getPendingServerRequests,
   getSkillsList,
   getThreadDetail,
+  recoverThreadPageFileChanges,
   getThreadGoal,
   getWorkspaceMessages,
   interruptThreadTurn,
@@ -41,7 +42,9 @@ import {
   type UiPermissionProfile,
   type SkillInfo,
   type MentionParam,
+  type ThreadHistoryPage,
 } from '../api/codexGateway'
+import { mergeThreadHistory, orderedTurnIds } from '../utils/threadHistory'
 import { normalizeFileChangeStatus, toUiFileChanges } from '../api/normalizers/v2'
 import {
   getModelDisplayName,
@@ -965,6 +968,11 @@ export function useDesktopState() {
   const projectDisplayNameById = ref<Record<string, string>>(loadProjectDisplayNames())
   const loadedVersionByThreadId = ref<Record<string, string>>({})
   const loadedMessagesByThreadId = ref<Record<string, boolean>>({})
+  const historyCursorByThreadId = ref<Record<string, string | null>>({})
+  const historyLoadingByThreadId = ref<Record<string, boolean>>({})
+  const historyErrorByThreadId = ref<Record<string, string>>({})
+  const historyRequests = new Map<string, Promise<void>>()
+  const historyRequestTokens = new Map<string, symbol>()
   const resumedThreadById = ref<Record<string, boolean>>({})
   const turnIndexByTurnIdByThreadId = ref<Record<string, Record<string, number>>>({})
   const turnSummaryByThreadId = ref<Record<string, TurnSummaryState>>({})
@@ -1011,6 +1019,9 @@ export function useDesktopState() {
   const selectedThreadScrollState = computed<ThreadScrollState | null>(
     () => scrollStateByThreadId.value[selectedThreadId.value] ?? null,
   )
+  const selectedThreadHasOlderMessages = computed(() => Boolean(historyCursorByThreadId.value[selectedThreadId.value]))
+  const isLoadingOlderMessages = computed(() => historyLoadingByThreadId.value[selectedThreadId.value] === true)
+  const olderMessagesError = computed(() => historyErrorByThreadId.value[selectedThreadId.value] ?? '')
   const selectedThreadServerRequests = computed<UiServerRequest[]>(() => {
     const rows: UiServerRequest[] = []
     const selected = selectedThreadId.value
@@ -1436,8 +1447,8 @@ export function useDesktopState() {
       }
       // Remove the failed user turn before replaying on fallback model to avoid duplicated user messages.
       try {
-        const rolledBackMessages = await rollbackThread(threadId, 1)
-        setPersistedMessagesForThread(threadId, rolledBackMessages)
+        const rolledBack = await rollbackThread(threadId, 1)
+        replaceHistory(threadId, rolledBack)
         clearLivePlansForThread(threadId)
         setLiveAgentMessagesForThread(threadId, [])
         clearLiveReasoningForThread(threadId)
@@ -1695,6 +1706,15 @@ export function useDesktopState() {
       saveSelectedModelPreferenceMap(nextModelPreferences)
     }
     loadedMessagesByThreadId.value = pruneThreadStateMap(loadedMessagesByThreadId.value, activeThreadIds)
+    historyCursorByThreadId.value = pruneThreadStateMap(historyCursorByThreadId.value, activeThreadIds)
+    historyLoadingByThreadId.value = pruneThreadStateMap(historyLoadingByThreadId.value, activeThreadIds)
+    historyErrorByThreadId.value = pruneThreadStateMap(historyErrorByThreadId.value, activeThreadIds)
+    for (const threadId of historyRequestTokens.keys()) {
+      if (!activeThreadIds.has(threadId)) {
+        historyRequestTokens.delete(threadId)
+        historyRequests.delete(threadId)
+      }
+    }
     loadedVersionByThreadId.value = pruneThreadStateMap(loadedVersionByThreadId.value, activeThreadIds)
     resumedThreadById.value = pruneThreadStateMap(resumedThreadById.value, activeThreadIds)
     turnIndexByTurnIdByThreadId.value = pruneThreadStateMap(turnIndexByTurnIdByThreadId.value, activeThreadIds)
@@ -2627,7 +2647,7 @@ export function useDesktopState() {
 
   function inferNextTurnIndex(threadId: string): number {
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
-    let maxTurnIndex = -1
+    let maxTurnIndex = Math.max(-1, ...Object.values(turnIndexByTurnIdByThreadId.value[threadId] ?? {}))
     for (const message of persisted) {
       if (typeof message.turnIndex === 'number' && Number.isFinite(message.turnIndex)) {
         maxTurnIndex = Math.max(maxTurnIndex, message.turnIndex)
@@ -2639,7 +2659,7 @@ export function useDesktopState() {
   function setTurnIndexForThread(threadId: string, turnId: string, turnIndex: number): void {
     if (!threadId || !turnId || !Number.isInteger(turnIndex) || turnIndex < 0) return
     const previous = turnIndexByTurnIdByThreadId.value[threadId] ?? {}
-    if (previous[turnId] === turnIndex) return
+    if (previous[turnId] !== undefined) return
     turnIndexByTurnIdByThreadId.value = {
       ...turnIndexByTurnIdByThreadId.value,
       [threadId]: {
@@ -2690,11 +2710,11 @@ export function useDesktopState() {
     const turnIndexByTurnId = turnIndexByTurnIdByThreadId.value[threadId] ?? {}
     let changed = false
     const next = current.map((message) => {
-      if (typeof message.turnIndex === 'number' || !message.turnId) {
+      if (!message.turnId) {
         return message
       }
       const turnIndex = turnIndexByTurnId[message.turnId]
-      if (typeof turnIndex !== 'number') return message
+      if (typeof turnIndex !== 'number' || turnIndex === message.turnIndex) return message
       changed = true
       return { ...message, turnIndex }
     })
@@ -3375,7 +3395,54 @@ export function useDesktopState() {
     }
   }
 
-  async function loadMessages(threadId: string, options: { silent?: boolean } = {}) {
+  async function loadMessages(threadId: string, options: { silent?: boolean } = {}): Promise<void> {
+    const pending = historyRequests.get(threadId)
+    if (pending) return pending
+    const token = Symbol(threadId)
+    historyRequestTokens.set(threadId, token)
+    const request = loadRecentMessages(threadId, options, token)
+    historyRequests.set(threadId, request)
+    try {
+      await request
+    } finally {
+      if (historyRequests.get(threadId) === request) historyRequests.delete(threadId)
+    }
+  }
+
+  function applyHistoryPage(threadId: string, page: ThreadHistoryPage, older: boolean): void {
+    const previous = persistedMessagesByThreadId.value[threadId] ?? []
+    const turnIds = orderedTurnIds(turnIndexByTurnIdByThreadId.value[threadId] ?? {})
+    const merged = mergeThreadHistory(previous, turnIds, page, older)
+    replaceTurnIndexLookupForThread(threadId, merged.turnIndexByTurnId)
+    rebindLiveFileChangeTurnIndices(threadId)
+    setPersistedMessagesForThread(threadId, mergeMessages(previous, merged.messages))
+  }
+
+  function replaceHistory(threadId: string, page: ThreadHistoryPage): void {
+    historyRequestTokens.set(threadId, Symbol(threadId))
+    historyCursorByThreadId.value[threadId] = page.nextCursor
+    replaceTurnIndexLookupForThread(threadId, page.turnIndexByTurnId)
+    setPersistedMessagesForThread(threadId, page.messages)
+    rebindLiveFileChangeTurnIndices(threadId)
+  }
+
+  async function recoverHistoryPage(threadId: string, page: ThreadHistoryPage): Promise<void> {
+    const recovered = await recoverThreadPageFileChanges(threadId, page.messages, orderedTurnIds(page.turnIndexByTurnId))
+    const originalIds = new Set(page.messages.map((message) => message.id))
+    const extras = recovered.filter((message) => !originalIds.has(message.id))
+    if (extras.length === 0) return
+    const previous = persistedMessagesByThreadId.value[threadId] ?? []
+    const lookup = turnIndexByTurnIdByThreadId.value[threadId] ?? {}
+    const existingIds = new Set(previous.map((message) => message.id))
+    const existingChangeTurns = new Set(previous.filter((message) => message.messageType === 'fileChange').map((message) => message.turnId))
+    const next = [...previous, ...extras.filter((message) => message.turnId && lookup[message.turnId] !== undefined
+      && !existingIds.has(message.id) && !existingChangeTurns.has(message.turnId))
+      .map((message) => ({ ...message, turnIndex: lookup[message.turnId!] }))]
+      .sort((a, b) => (a.turnIndex ?? Infinity) - (b.turnIndex ?? Infinity))
+    setPersistedMessagesForThread(threadId, next)
+  }
+
+  async function loadRecentMessages(threadId: string, options: { silent?: boolean }, token: symbol) {
     if (!threadId) {
       return
     }
@@ -3388,14 +3455,35 @@ export function useDesktopState() {
 
     try {
       void refreshThreadGoal(threadId)
-      const { messages: nextMessages, inProgress, turnIndexByTurnId } = await getThreadDetail(threadId)
-      replaceTurnIndexLookupForThread(threadId, turnIndexByTurnId)
-      rebindLiveFileChangeTurnIndices(threadId)
-      const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
-      const mergedMessages = mergeMessages(previousPersisted, nextMessages, {
-        preserveMissing: options.silent === true,
-      })
-      setPersistedMessagesForThread(threadId, mergedMessages)
+      let page = await getThreadDetail(threadId)
+      const { inProgress } = page
+      const existingIds = new Set(alreadyLoaded
+        ? (persistedMessagesByThreadId.value[threadId] ?? []).flatMap((message) => message.turnId ? [message.turnId] : [])
+        : [])
+      // Catch up to our existing window after inactivity without leaving a gap.
+      while (page.nextCursor && existingIds.size > 0
+        && !Object.keys(page.turnIndexByTurnId).some((id) => existingIds.has(id))) {
+        const older = await getThreadDetail(threadId, page.nextCursor)
+        if (older.nextCursor === page.nextCursor) throw new Error('Conversation history cursor did not advance')
+        const merged = mergeThreadHistory(page.messages, orderedTurnIds(page.turnIndexByTurnId), older, true)
+        page = { ...page, ...merged, nextCursor: older.nextCursor }
+      }
+      if (historyRequestTokens.get(threadId) !== token) return
+      const overlaps = Object.keys(page.turnIndexByTurnId).some((id) => existingIds.has(id))
+      if (!overlaps && alreadyLoaded) {
+        // The server may have rolled back or replaced the thread's turns.
+        replaceTurnIndexLookupForThread(threadId, {})
+        setPersistedMessagesForThread(threadId, [])
+      }
+      applyHistoryPage(threadId, page, false)
+      if (!alreadyLoaded || !overlaps) {
+        historyCursorByThreadId.value[threadId] = page.nextCursor
+      }
+      if (!alreadyLoaded) {
+        setThreadScrollState(threadId, { scrollTop: 0, isAtBottom: true, scrollRatio: 1 })
+      }
+      const nextMessages = page.messages
+      void recoverHistoryPage(threadId, page)
 
       const previousLiveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
       const nextLiveAgent = removeRedundantLiveAgentMessages(previousLiveAgent, nextMessages)
@@ -3431,6 +3519,37 @@ export function useDesktopState() {
     if (!threadId) return
     if (loadedMessagesByThreadId.value[threadId] === true) return
     await loadMessages(threadId, options)
+  }
+
+  async function loadOlderMessages(threadId: string): Promise<void> {
+    if (!threadId || historyLoadingByThreadId.value[threadId]) return
+    historyLoadingByThreadId.value[threadId] = true
+    historyErrorByThreadId.value[threadId] = ''
+    try {
+      await historyRequests.get(threadId)
+      const cursor = historyCursorByThreadId.value[threadId]
+      if (!cursor) return
+      const token = Symbol(threadId)
+      historyRequestTokens.set(threadId, token)
+      const request = (async () => {
+        const page = await getThreadDetail(threadId, cursor)
+        if (historyRequestTokens.get(threadId) !== token) return
+        if (page.nextCursor === cursor) throw new Error('Conversation history cursor did not advance')
+        applyHistoryPage(threadId, page, true)
+        historyCursorByThreadId.value[threadId] = page.nextCursor
+        void recoverHistoryPage(threadId, page)
+      })()
+      historyRequests.set(threadId, request)
+      try {
+        await request
+      } finally {
+        if (historyRequests.get(threadId) === request) historyRequests.delete(threadId)
+      }
+    } catch (unknownError) {
+      historyErrorByThreadId.value[threadId] = unknownError instanceof Error ? unknownError.message : 'Failed to load older messages'
+    } finally {
+      historyLoadingByThreadId.value[threadId] = false
+    }
   }
 
   async function refreshSkills(): Promise<void> {
@@ -3540,6 +3659,11 @@ export function useDesktopState() {
     scrollStateByThreadId.value = omitKey(scrollStateByThreadId.value, threadId)
     loadedVersionByThreadId.value = omitKey(loadedVersionByThreadId.value, threadId)
     loadedMessagesByThreadId.value = omitKey(loadedMessagesByThreadId.value, threadId)
+    historyCursorByThreadId.value = omitKey(historyCursorByThreadId.value, threadId)
+    historyLoadingByThreadId.value = omitKey(historyLoadingByThreadId.value, threadId)
+    historyErrorByThreadId.value = omitKey(historyErrorByThreadId.value, threadId)
+    historyRequestTokens.delete(threadId)
+    historyRequests.delete(threadId)
     turnIndexByTurnIdByThreadId.value = omitKey(turnIndexByTurnIdByThreadId.value, threadId)
     turnSummaryByThreadId.value = omitKey(turnSummaryByThreadId.value, threadId)
     turnActivityByThreadId.value = omitKey(turnActivityByThreadId.value, threadId)
@@ -3616,7 +3740,7 @@ export function useDesktopState() {
     const forkedCwd = forked.cwd.trim() || sourceThread?.cwd?.trim() || ''
     const forkedThreadTitle = toForkedThreadTitle(sourceThread?.title || sourceThread?.preview || 'Untitled thread')
     insertOptimisticThread(forkedThreadId, forkedCwd, forkedThreadTitle)
-    setPersistedMessagesForThread(forkedThreadId, forked.messages)
+    replaceHistory(forkedThreadId, forked)
     loadedMessagesByThreadId.value = {
       ...loadedMessagesByThreadId.value,
       [forkedThreadId]: true,
@@ -3659,7 +3783,7 @@ export function useDesktopState() {
     }
 
     const sourceMessages = persistedMessagesByThreadId.value[normalizedThreadId] ?? []
-    let lastTurnIndex = -1
+    let lastTurnIndex = Math.max(-1, ...Object.values(turnIndexByTurnIdByThreadId.value[normalizedThreadId] ?? {}))
     for (const message of sourceMessages) {
       if (typeof message.turnIndex === 'number' && Number.isFinite(message.turnIndex)) {
         lastTurnIndex = Math.max(lastTurnIndex, message.turnIndex)
@@ -3675,8 +3799,8 @@ export function useDesktopState() {
 
       const turnsToRollback = lastTurnIndex - turnIndex
       if (turnsToRollback > 0) {
-        const rolledBackMessages = await rollbackThread(forkedThreadId, turnsToRollback)
-        setPersistedMessagesForThread(forkedThreadId, rolledBackMessages)
+        const rolledBack = await rollbackThread(forkedThreadId, turnsToRollback)
+        replaceHistory(forkedThreadId, rolledBack)
       }
 
       setSelectedThreadId(forkedThreadId)
@@ -4561,6 +4685,11 @@ export function useDesktopState() {
     activeReasoningItemId = ''
     shouldAutoScrollOnNextAgentEvent = false
     persistedMessagesByThreadId.value = {}
+    historyCursorByThreadId.value = {}
+    historyLoadingByThreadId.value = {}
+    historyErrorByThreadId.value = {}
+    historyRequestTokens.clear()
+    historyRequests.clear()
     livePlanMessagesByThreadId.value = {}
     liveAgentMessagesByThreadId.value = {}
     liveReasoningTextByThreadId.value = {}
@@ -4627,6 +4756,9 @@ export function useDesktopState() {
     projectDisplayNameById,
     selectedThread,
     selectedThreadScrollState,
+    selectedThreadHasOlderMessages,
+    isLoadingOlderMessages,
+    olderMessagesError,
     selectedThreadServerRequests,
     selectedLiveOverlay,
     codexQuota,
@@ -4661,6 +4793,7 @@ export function useDesktopState() {
     selectThread,
     loadMessages,
     ensureThreadMessagesLoaded,
+    loadOlderMessages,
     setThreadScrollState,
     archiveThreadById,
     deleteThreadById,
