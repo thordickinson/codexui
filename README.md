@@ -54,6 +54,14 @@ cloudflared tunnel --url http://localhost:<port>
 It prints the tunnel URL, terminal QR code, and password together in startup output.  
 Use `--no-tunnel` to disable this behavior.
 
+Browser sign-ins last for 30 days, including page refreshes, browser reopens, and
+server restarts when using the same password and browser address. Changing the
+password or clearing the browser's cookies requires signing in again. Use a fixed
+`--password` to retain sessions across restarts; the default generated password
+changes on each launch. The server stores a private signing key at
+`$CODEX_HOME/codexui-session-key` (default: `~/.codex/codexui-session-key`). Removing
+that file and restarting the server invalidates all existing browser sessions.
+
 ### Linux 🐧
 ```bash
 node -v   # should be 18+

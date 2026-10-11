@@ -1,8 +1,52 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { RequestHandler, Request, Response, NextFunction } from 'express'
 
 const TOKEN_COOKIE = 'codex_web_local_token'
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+
+function loadSessionKey(password: string): Buffer {
+  const codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), '.codex')
+  const keyPath = join(codexHome, 'codexui-session-key')
+  mkdirSync(codexHome, { recursive: true, mode: 0o700 })
+  try {
+    writeFileSync(keyPath, randomBytes(32).toString('hex'), { flag: 'wx', mode: 0o600 })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
+
+  const secret = readFileSync(keyPath, 'utf8').trim()
+  if (!/^[a-f0-9]{64}$/.test(secret)) {
+    throw new Error(`Invalid session signing key: ${keyPath}`)
+  }
+
+  // Keep sessions across restarts, but reject them if the configured password changes.
+  return createHmac('sha256', Buffer.from(secret, 'hex'))
+    .update('codexui-session-v1\0')
+    .update(password)
+    .digest()
+}
+
+function signToken(payload: string, key: Buffer): string {
+  return createHmac('sha256', key).update(payload).digest('hex')
+}
+
+function createToken(key: Buffer): string {
+  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS
+  const payload = `v1.${expiresAt}.${randomBytes(32).toString('hex')}`
+  return `${payload}.${signToken(payload, key)}`
+}
+
+function isValidToken(token: string, key: Buffer): boolean {
+  const match = /^v1\.(\d{1,12})\.([a-f0-9]{64})\.([a-f0-9]{64})$/.exec(token)
+  if (!match) return false
+  const [, expiry, nonce, signature] = match
+  if (Number(expiry) <= Math.floor(Date.now() / 1000)) return false
+  return constantTimeCompare(signature!, signToken(`v1.${expiry}.${nonce}`, key))
+}
 
 function isLocalhostRequest(req: Request): boolean {
   const remote = req.socket.remoteAddress ?? ''
@@ -47,7 +91,7 @@ function isAuthorizedByRequestLike(
   remoteAddress: string | undefined,
   hostHeader: string | undefined,
   cookieHeader: string | undefined,
-  validTokens: Set<string>,
+  sessionKey: Buffer,
 ): boolean {
   const remote = remoteAddress ?? ''
   if (isLocalhostRemote(remote) || isLocalhostHost(hostHeader ?? '')) {
@@ -56,7 +100,7 @@ function isAuthorizedByRequestLike(
 
   const cookies = parseCookies(cookieHeader)
   const token = cookies[TOKEN_COOKIE]
-  return Boolean(token && validTokens.has(token))
+  return Boolean(token && isValidToken(token, sessionKey))
 }
 
 const LOGIN_PAGE_HTML = `<!DOCTYPE html>
@@ -111,10 +155,10 @@ export type AuthSession = {
 }
 
 export function createAuthSession(password: string): AuthSession {
-  const validTokens = new Set<string>()
+  const sessionKey = loadSessionKey(password)
 
   const middleware: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
-    if (isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokens)) {
+    if (isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, sessionKey)) {
       next()
       return
     }
@@ -134,10 +178,9 @@ export function createAuthSession(password: string): AuthSession {
             return
           }
 
-          const token = randomBytes(32).toString('hex')
-          validTokens.add(token)
+          const token = createToken(sessionKey)
 
-          res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict`)
+          res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE_SECONDS}${req.secure ? '; Secure' : ''}`)
           res.json({ ok: true })
         } catch {
           res.status(400).json({ error: 'Invalid request body' })
@@ -154,7 +197,7 @@ export function createAuthSession(password: string): AuthSession {
   return {
     middleware,
     isRequestAuthorized: (req: IncomingMessage) => (
-      isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokens)
+      isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, sessionKey)
     ),
   }
 }
