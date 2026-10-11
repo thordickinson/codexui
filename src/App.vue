@@ -1228,8 +1228,9 @@ function onRenameProject(payload: { projectName: string; displayName: string }):
   renameProject(payload.projectName, payload.displayName)
 }
 
-function onRenameThread(payload: { threadId: string; title: string }): void {
-  void renameThreadById(payload.threadId, payload.title)
+async function onRenameThread(payload: { threadId: string; title: string; complete: (errorMessage?: string) => void }): Promise<void> {
+  const errorMessage = await renameThreadById(payload.threadId, payload.title)
+  payload.complete(errorMessage || undefined)
 }
 
 async function onRemoveProject(projectName: string): Promise<void> {

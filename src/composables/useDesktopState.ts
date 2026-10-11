@@ -3730,17 +3730,22 @@ export function useDesktopState() {
     }
   }
 
-  async function renameThreadById(threadId: string, threadName: string) {
+  async function renameThreadById(threadId: string, threadName: string): Promise<string> {
     const normalizedName = threadName.trim()
-    if (!threadId || !normalizedName) return
+    if (!threadId) return 'No thread selected'
+    if (!normalizedName) return 'Enter a thread title'
 
     try {
       await renameThread(threadId, normalizedName)
       threadTitleById.value = { ...threadTitleById.value, [threadId]: normalizedName }
       applyThreadFlags()
       void persistThreadTitle(threadId, normalizedName)
+      error.value = ''
+      return ''
     } catch (unknownError) {
-      error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      const message = unknownError instanceof Error && unknownError.message ? unknownError.message : 'Failed to rename thread'
+      error.value = message
+      return message
     }
   }
 

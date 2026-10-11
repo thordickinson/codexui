@@ -576,12 +576,16 @@
             class="rename-thread-input"
             type="text"
             placeholder="Add title..."
+            :disabled="renameThreadPending"
             @keydown.enter.prevent="submitRenameThread"
             @keydown.esc.prevent="closeRenameThreadDialog"
           />
+          <p v-if="renameThreadError" class="rename-thread-error" role="alert">{{ renameThreadError }}</p>
           <div class="rename-thread-actions">
-            <button class="rename-thread-button" type="button" @click="closeRenameThreadDialog">Cancel</button>
-            <button class="rename-thread-button rename-thread-button-primary" type="button" @click="submitRenameThread">Save</button>
+            <button class="rename-thread-button" type="button" :disabled="renameThreadPending" @click="closeRenameThreadDialog">Cancel</button>
+            <button class="rename-thread-button rename-thread-button-primary" type="button" :disabled="renameThreadPending || !renameThreadDraft.trim()" @click="submitRenameThread">
+              {{ renameThreadPending ? 'Saving…' : 'Save' }}
+            </button>
           </div>
         </div>
       </div>
@@ -651,7 +655,7 @@ const emit = defineEmits<{
   'switch-project-branch': [payload: { projectName: string; branch: string }]
   'create-project-worktree': [payload: { projectName: string; branch: string }]
   'rename-project': [payload: { projectName: string; displayName: string }]
-  'rename-thread': [payload: { threadId: string; title: string }]
+  'rename-thread': [payload: { threadId: string; title: string; complete: (errorMessage?: string) => void }]
   'remove-project': [projectName: string]
   'reorder-project': [payload: { projectName: string; toIndex: number }]
   'export-thread': [threadId: string]
@@ -705,6 +709,8 @@ const projectBranchDraft = ref('')
 const renameThreadDialogVisible = ref(false)
 const renameThreadDialogThreadId = ref('')
 const renameThreadDraft = ref('')
+const renameThreadPending = ref(false)
+const renameThreadError = ref('')
 const renameThreadInputRef = ref<HTMLInputElement | null>(null)
 const deleteThreadDialogVisible = ref(false)
 const deleteThreadDialogThreadId = ref('')
@@ -1133,8 +1139,10 @@ function toggleThreadMenu(threadId: string): void {
 }
 
 function openRenameThreadDialog(threadId: string, currentTitle: string): void {
+  if (renameThreadPending.value) return
   renameThreadDialogThreadId.value = threadId
   renameThreadDraft.value = currentTitle
+  renameThreadError.value = ''
   renameThreadDialogVisible.value = true
   closeThreadMenu()
   nextTick(() => {
@@ -1144,17 +1152,33 @@ function openRenameThreadDialog(threadId: string, currentTitle: string): void {
 }
 
 function closeRenameThreadDialog(): void {
+  if (renameThreadPending.value) return
   renameThreadDialogVisible.value = false
   renameThreadDialogThreadId.value = ''
   renameThreadDraft.value = ''
+  renameThreadError.value = ''
 }
 
 function submitRenameThread(): void {
   const threadId = renameThreadDialogThreadId.value
   const title = renameThreadDraft.value.trim()
-  if (!threadId || !title) return
-  emit('rename-thread', { threadId, title })
-  closeRenameThreadDialog()
+  if (!threadId || !title || renameThreadPending.value) return
+  renameThreadPending.value = true
+  renameThreadError.value = ''
+  emit('rename-thread', {
+    threadId,
+    title,
+    complete: (errorMessage?: string) => {
+      if (renameThreadDialogThreadId.value !== threadId) return
+      renameThreadPending.value = false
+      if (errorMessage) {
+        renameThreadError.value = errorMessage
+        nextTick(() => renameThreadInputRef.value?.focus())
+        return
+      }
+      closeRenameThreadDialog()
+    },
+  })
 }
 
 function openDeleteThreadDialog(threadId: string, currentTitle: string): void {
