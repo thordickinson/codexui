@@ -511,7 +511,17 @@ function groupThreadsByProject(threads: UiThread[]): UiProjectGroup[] {
 }
 
 export function normalizeThreadGroupsV2(payload: ThreadListResponse): UiProjectGroup[] {
-  const uiThreads = payload.data.map(toUiThread)
+  // The server can return multiple records for one conversation, including
+  // within a single page. Deduplicate before grouping so a thread also cannot
+  // appear in multiple projects when its cwd has changed.
+  const threadsById = new Map<string, Thread>()
+  for (const thread of payload.data) {
+    const previous = threadsById.get(thread.id)
+    if (!previous || thread.updatedAt > previous.updatedAt) {
+      threadsById.set(thread.id, thread)
+    }
+  }
+  const uiThreads = Array.from(threadsById.values(), toUiThread)
   return groupThreadsByProject(uiThreads)
 }
 
